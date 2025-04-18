@@ -104,6 +104,8 @@ Temporary Items
 
 # End of https://www.gitignore.io/api/osx,c++,cuda,linux,cmake
 
+data
+
 build
 buildWASM
 docs/html

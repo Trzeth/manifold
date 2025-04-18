@@ -448,7 +448,7 @@ class Manifold {
   static Manifold ImportMeshGL64(std::istream& stream);
 #endif
 
- private:
+ public:
   Manifold(std::shared_ptr<CsgNode> pNode_);
   Manifold(std::shared_ptr<Impl> pImpl_);
   static Manifold Invalid();
