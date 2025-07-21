@@ -335,5 +335,5 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: DeterminateSystems/nix-installer-action@main
-    - run: nix build -L '.?submodules=1#$manifold-tbb'
+    - run: nix build -L '.?submodules=1#manifold-tbb'
 
