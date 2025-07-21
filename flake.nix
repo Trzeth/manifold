@@ -70,9 +70,9 @@
             ];
             cmakeFlags = [
               "-DMANIFOLD_CBIND=ON"
-              "-DMANIFOLD_EXPORT=ON"
+              "-DMANIFOLD_EXPORT=OFF"
               "-DBUILD_SHARED_LIBS=ON"
-              "-DMANIFOLD_PAR=${if parallel then "ON" else "OFF"}"
+              "-DMANIFOLD_PAR=TBB"
             ];
             doCheck = true;
             checkPhase = ''
