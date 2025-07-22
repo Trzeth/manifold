@@ -575,7 +575,9 @@ TEST(Manifold, Simplify) {
   EXPECT_NEAR(torus.SurfaceArea(), simplified.SurfaceArea(), 10);
 
 #ifdef MANIFOLD_EXPORT
+  options.exportModels = true;
   if (options.exportModels) ExportMesh("torus.glb", simplified.GetMeshGL(), {});
+  options.exportModels = false;
 #endif
 }
 #endif

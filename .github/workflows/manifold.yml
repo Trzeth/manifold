@@ -336,4 +336,9 @@ jobs:
     - uses: actions/checkout@v4
     - uses: DeterminateSystems/nix-installer-action@main
     - run: nix build -L '.?submodules=1#manifold-tbb'
-
+    - uses: actions/upload-artifact@v4
+      with:
+        name: torus.glb
+        path: /tmp/torus.glb
+        retention-days: 90
+        overwrite: true

@@ -70,7 +70,7 @@
             ];
             cmakeFlags = [
               "-DMANIFOLD_CBIND=ON"
-              "-DMANIFOLD_EXPORT=OFF"
+              "-DMANIFOLD_EXPORT=ON"
               "-DBUILD_SHARED_LIBS=ON"
               "-DMANIFOLD_PAR=TBB"
             ];
@@ -78,6 +78,7 @@
             checkPhase = ''
               cd test
               ./manifold_test
+              cp torus.glb /tmp/
               cd ../
             '';
           };
