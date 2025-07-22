@@ -273,8 +273,8 @@ void AddNewEdgeVerts(
     return;
   }
 #endif
-  auto processFun =
-      std::bind(process, [](size_t) {}, [](size_t) {}, std::placeholders::_1);
+  auto processFun = std::bind(
+      process, [](size_t) {}, [](size_t) {}, std::placeholders::_1);
   for (size_t i = 0; i < p1q2.size(); ++i) processFun(i);
 }
 
@@ -901,6 +901,9 @@ Manifold::Impl Boolean3::Result(OpType op) const {
   CreateProperties(outR, inP_, inQ_);
 
   UpdateReference(outR, inP_, inQ_, invertQ);
+
+  DEBUG_ASSERT(outR.Is2Manifold(), logicErr,
+               "triangulated mesh is not manifold!");
 
   outR.SimplifyTopology(nPv + nQv);
   outR.RemoveUnreferencedVerts();
