@@ -657,26 +657,40 @@ MeshGL mgl_1() {
 }
 
 void mesh_diff() {
+  ManifoldParams().intermediateChecks = true;
+  ManifoldParams().verbose = true;
+
+  // This will case triangulation is not entirely CCW!
+  ManifoldParams().processOverlaps = false;
+
   Manifold arg0 = Manifold(mgl_0());
 
   auto tol1 = arg0.GetTolerance();
-  arg0.SetTolerance(1e-1);
 
   Manifold arg1 = Manifold(mgl_1());
-
   auto tol2 = arg1.GetTolerance();
 
-  arg1.SetTolerance(1e-1);
-  ManifoldParams().intermediateChecks = true;
+  arg0 = arg0.AsOriginal().SetTolerance(1e-5);
+  arg1 = arg1.AsOriginal().SetTolerance(1e-5);
+
+  // arg1 = arg1.Simplify(1e-5);
+  // MeshGL marg1 = arg1.GetMeshGL();
+  // manifold::ExportMesh("marg1S.obj", marg1, {});
+
+  // arg1 = Manifold(marg1);
+
+  // Manifold rCube = Manifold::Cube({4, 4, 4}).Translate({-2, -2, -2}) - arg1;
+
+  // manifold::ExportMesh("cube.obj", rCube.GetMeshGL(), {});
 
   Manifold result = arg0 - arg1;
-  auto r1 = result.GetTolerance();
+  // auto r1 = result.GetTolerance();
 
   if (result.Status() != Manifold::Error::NoError) {
     std::cout << "Manifold returned an error " << int(result.Status()) << "\n";
   }
   MeshGL mgl = result.GetMeshGL();
-  manifold::ExportMesh("result.obj", mgl, {});
+  manifold::ExportMesh("marg1.obj", mgl, {});
   dump_meshgl(mgl);
 }
 

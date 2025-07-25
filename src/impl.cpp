@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <optional>
 
@@ -531,16 +532,45 @@ void Manifold::Impl::CreateHalfedges(const Vec<ivec3>& triProp,
   for (int i = 0; i < numEdge; ++i)
     consecutiveStart = body(i, consecutiveStart, numEdge);
 #endif
-  for_each_n(policy, countAt(0), numEdge, [this, &ids, numEdge](int i) {
-    const int pair0 = ids[i];
-    const int pair1 = ids[i + numEdge];
-    if (halfedge_[pair0].pairedHalfedge != kRemovedHalfedge) {
-      halfedge_[pair0].pairedHalfedge = pair1;
-      halfedge_[pair1].pairedHalfedge = pair0;
-    } else {
-      halfedge_[pair0] = halfedge_[pair1] = {-1, -1, -1};
-    }
-  });
+
+  std::vector<vec3> p;
+  if (numTri != 1192) {
+    for_each_n(policy, countAt(0), numEdge, [this, &ids, numEdge](int i) {
+      const int pair0 = ids[i];
+      const int pair1 = ids[i + numEdge];
+      if (halfedge_[pair0].pairedHalfedge != kRemovedHalfedge) {
+        halfedge_[pair0].pairedHalfedge = pair1;
+        halfedge_[pair1].pairedHalfedge = pair0;
+      } else {
+        halfedge_[pair0] = halfedge_[pair1] = {-1, -1, -1};
+      }
+    });
+  } else {
+    for_each_n(policy, countAt(0), numEdge, [this, &ids, numEdge](int i) {
+      const int pair0 = ids[i];
+      const int pair1 = ids[i + numEdge];
+      if (halfedge_[pair0].pairedHalfedge != kRemovedHalfedge) {
+        halfedge_[pair0].pairedHalfedge = pair1;
+        halfedge_[pair1].pairedHalfedge = pair0;
+
+        std::cout << pair0 << "(" << halfedge_[pair0].startVert << "|"
+                  << vertPos_[halfedge_[pair0].startVert] << ","
+                  << halfedge_[pair0].endVert << "|"
+                  << vertPos_[halfedge_[pair0].endVert] << ")" << "\t" << pair1
+                  << "(" << halfedge_[pair1].startVert << "|"
+                  << vertPos_[halfedge_[pair1].startVert] << ","
+                  << halfedge_[pair1].endVert << "|"
+                  << vertPos_[halfedge_[pair1].endVert] << ")" << std::endl;
+      } else {
+        halfedge_[pair0] = halfedge_[pair1] = {-1, -1, -1};
+      }
+    });
+  }
+
+  std::ofstream f("t" + std::to_string(numTri) + "v.obj");
+
+  f << *this;
+  f.close();
 }
 
 /**
@@ -789,7 +819,7 @@ std::ostream& operator<<(std::ostream& stream, const Manifold::Impl& impl) {
     triangles.emplace_back(impl.halfedge_[i].startVert + 1,
                            impl.halfedge_[i + 1].startVert + 1,
                            impl.halfedge_[i + 2].startVert + 1);
-  sort(triangles.begin(), triangles.end());
+  // sort(triangles.begin(), triangles.end());
   for (const auto& tri : triangles)
     stream << "f " << tri.x << " " << tri.y << " " << tri.z << std::endl;
   stream << "# ======== end mesh =======" << std::endl;

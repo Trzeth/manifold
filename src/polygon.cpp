@@ -122,8 +122,15 @@ void CheckGeometry(const std::vector<ivec3>& triangles,
   }
   DEBUG_ASSERT(std::all_of(triangles.begin(), triangles.end(),
                            [&vertPos, epsilon](const ivec3& tri) {
-                             return CCW(vertPos[tri[0]], vertPos[tri[1]],
-                                        vertPos[tri[2]], epsilon) >= 0;
+                             bool r = CCW(vertPos[tri[0]], vertPos[tri[1]],
+                                          vertPos[tri[2]], epsilon) >= 0;
+                             if (!r) {
+                               std::cout << "(" << vertPos[tri[0]] << ", "
+                                         << vertPos[tri[1]] << ", "
+                                         << vertPos[tri[2]] << ")\n";
+                             }
+
+                             return r;
                            }),
                geometryErr, "triangulation is not entirely CCW!");
 }

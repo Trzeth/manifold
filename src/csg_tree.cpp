@@ -132,23 +132,17 @@ std::shared_ptr<CsgLeafNode> SimpleBoolean(const Manifold::Impl& a,
 #endif
     dump_lock.unlock();
   };
-  try {
-    Boolean3 boolean(a, b, op);
-    auto impl = boolean.Result(op);
-    if (ManifoldParams().selfIntersectionChecks && impl.IsSelfIntersecting()) {
-      dump_lock.lock();
-      std::cout << "self intersections detected" << std::endl;
-      dump_lock.unlock();
-      throw logicErr("self intersection detected");
-    }
-    return ImplToLeaf(std::move(impl));
-  } catch (logicErr& err) {
-    dump();
-    throw err;
-  } catch (geometryErr& err) {
-    dump();
-    throw err;
+
+  Boolean3 boolean(a, b, op);
+  auto impl = boolean.Result(op);
+  if (ManifoldParams().selfIntersectionChecks && impl.IsSelfIntersecting()) {
+    dump_lock.lock();
+    std::cout << "self intersections detected" << std::endl;
+    dump_lock.unlock();
+    throw logicErr("self intersection detected");
   }
+  return ImplToLeaf(std::move(impl));
+
 #else
   return ImplToLeaf(Boolean3(a, b, op).Result(op));
 #endif

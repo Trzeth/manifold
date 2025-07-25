@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <map>
 
 #include "boolean3.h"
@@ -273,8 +274,8 @@ void AddNewEdgeVerts(
     return;
   }
 #endif
-  auto processFun = std::bind(
-      process, [](size_t) {}, [](size_t) {}, std::placeholders::_1);
+  auto processFun =
+      std::bind(process, [](size_t) {}, [](size_t) {}, std::placeholders::_1);
   for (size_t i = 0; i < p1q2.size(); ++i) processFun(i);
 }
 
@@ -705,6 +706,18 @@ Manifold::Impl Boolean3::Result(OpType op) const {
   assemble.Start();
 #endif
 
+  auto checkHalfEdge = [](const Vec<Halfedge>& v) -> void {
+    for (size_t i = 0; i != v.size(); i++) {
+      if (v[i].startVert == -1 && v[i].endVert == -1 &&
+          v[i].pairedHalfedge == -1) {
+        std::cout << i << std::endl;
+        throw std::bad_exception();
+      }
+    };
+
+    std::cout << "----------------------------" << std::endl;
+  };
+
   DEBUG_ASSERT((expandP_ > 0) == (op == OpType::Add), logicErr,
                "Result op type not compatible with constructor op type.");
   const int c1 = op == OpType::Intersect ? 0 : 1;
@@ -879,20 +892,74 @@ Manifold::Impl Boolean3::Result(OpType op) const {
 
   // Level 6
 
+  checkHalfEdge(outR.halfedge_);
+
   if (ManifoldParams().intermediateChecks)
     DEBUG_ASSERT(outR.IsManifold(), logicErr, "polygon mesh is not manifold!");
+
+  for (size_t i = 0; i != outR.halfedge_.size(); i++) {
+    const auto& halfedge_ = outR.halfedge_;
+    const auto& vertPos_ = outR.vertPos_;
+    size_t pair0 = i, pair1 = halfedge_[pair0].pairedHalfedge;
+
+    std::cout << pair0 << "(" << halfedge_[pair0].startVert << "|"
+              << vertPos_[halfedge_[pair0].startVert] << ","
+              << halfedge_[pair0].endVert << "|"
+              << vertPos_[halfedge_[pair0].endVert] << ")" << "\t" << pair1
+              << "(" << halfedge_[pair1].startVert << "|"
+              << vertPos_[halfedge_[pair1].startVert] << ","
+              << halfedge_[pair1].endVert << "|"
+              << vertPos_[halfedge_[pair1].endVert] << ")" << std::endl;
+  };
 
   outR.Face2Tri(faceEdge, halfedgeRef);
   halfedgeRef.clear();
   faceEdge.clear();
 
+  checkHalfEdge(outR.halfedge_);
+
   ReorderHalfedges(outR.halfedge_);
 
+  checkHalfEdge(outR.halfedge_);
+
+  // outR.halfedge_[outR.halfedge_[1429].pairedHalfedge].pairedHalfedge =
+  //     outR.halfedge_[1430].pairedHalfedge;
+  // outR.halfedge_[outR.halfedge_[1430].pairedHalfedge].pairedHalfedge =
+  //     outR.halfedge_[1429].pairedHalfedge;
+
+  // outR.halfedge_[outR.halfedge_[1432].pairedHalfedge].pairedHalfedge =
+  //     outR.halfedge_[1433].pairedHalfedge;
+  // outR.halfedge_[outR.halfedge_[1433].pairedHalfedge].pairedHalfedge =
+  //     outR.halfedge_[1432].pairedHalfedge;
+
+  // 1428 1431
+
+  // outR.halfedge_[1429] = Halfedge{-1, -1, -1};
+  // outR.halfedge_[1430] = Halfedge{-1, -1, -1};
+  // outR.halfedge_[1432] = Halfedge{-1, -1, -1};
+  // outR.halfedge_[1433] = Halfedge{-1, -1, -1};
 #ifdef MANIFOLD_DEBUG
   triangulate.Stop();
   Timer simplify;
   simplify.Start();
 #endif
+  // auto check = [](const Vec<Halfedge>& halfedges, size_t edge) -> bool {
+  //   const Halfedge halfedge = halfedges[edge];
+  //   if (halfedge.startVert == -1 || halfedge.endVert == -1) return true;
+  //   if (halfedge.pairedHalfedge == -1) return false;
+
+  //   const Halfedge paired = halfedges[halfedge.pairedHalfedge];
+  //   bool good = true;
+  //   good &= paired.pairedHalfedge == static_cast<int>(edge);
+  //   good &= halfedge.startVert != halfedge.endVert;
+  //   good &= halfedge.startVert == paired.endVert;
+  //   good &= halfedge.endVert == paired.startVert;
+  //   return good;
+  // };
+
+  // for (size_t i = 0; i < outR.halfedge_.size(); i++) {
+  //   if (!check(outR.halfedge_, i)) std::cout << i << std::endl;
+  // }
 
   if (ManifoldParams().intermediateChecks)
     DEBUG_ASSERT(outR.IsManifold(), logicErr,
@@ -902,8 +969,7 @@ Manifold::Impl Boolean3::Result(OpType op) const {
 
   UpdateReference(outR, inP_, inQ_, invertQ);
 
-  DEBUG_ASSERT(outR.Is2Manifold(), logicErr,
-               "triangulated mesh is not manifold!");
+  checkHalfEdge(outR.halfedge_);
 
   outR.SimplifyTopology(nPv + nQv);
   outR.RemoveUnreferencedVerts();
