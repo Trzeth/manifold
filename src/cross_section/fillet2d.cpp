@@ -57,9 +57,19 @@ C2::PathD pathd_of_contour(const SimplePolygon& ctr) {
 
 namespace {
 
+struct Edge {
+  size_t LoopIndex;
+  size_t EdgeIndex;
+};
+
 struct EdgePair {
   std::array<size_t, 2> LoopIndex;
   std::array<size_t, 2> EdgeIndex;
+};
+
+struct ColliderContext {
+  Collider MyCollider;
+  std::vector<Edge> EdgeOld2NewVec;
 };
 
 // Two edge tangent by same circle
@@ -421,9 +431,10 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
 namespace {
 using namespace manifold;
 
-std::vector<EdgePair> Collisions(const Polygons& polygons,
-                                 const std::vector<size_t>& loopOffsetVec,
-                                 double radius, bool invert) {
+ColliderContext BuildCollider(const Polygons& polygons,
+                              const std::vector<size_t>& loopOffsetVec,
+                              std::vector<EdgePair>& edgePairVec, double radius,
+                              bool invert) {
   struct EdgeOld2New {
     manifold::Box Box;
     uint32_t Morton;
@@ -499,7 +510,13 @@ std::vector<EdgePair> Collisions(const Polygons& polygons,
                       mortonVec.begin(),
                       [](const EdgeOld2New& edge) { return edge.Morton; });
 
-  Collider collider(boxVec, mortonVec);
+  ColliderContext info{Collider(boxVec, mortonVec), {}};
+  info.EdgeOld2NewVec.resize(edgeOld2NewVec.size());
+
+  manifold::transform(edgeOld2NewVec.begin(), edgeOld2NewVec.end(),
+                      info.EdgeOld2NewVec.begin(), [](const EdgeOld2New& edge) {
+                        return Edge{edge.LoopIndex, edge.EdgeIndex};
+                      });
 
   std::vector<EdgePair> edgePair;
 
@@ -516,15 +533,18 @@ std::vector<EdgePair> Collisions(const Polygons& polygons,
   };
   auto recorder = MakeSimpleRecorder(recordCollision);
 
-  collider.Collisions(filletBoxVec.cview(), recorder);
+  info.MyCollider.Collisions(filletBoxVec.cview(), recorder);
 
-  return edgePair;
+  edgePairVec.clear();
+  edgePairVec = edgePair;
+
+  return info;
 }
 
 std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     const Polygons& loops, const std::vector<size_t>& loopOffsetVec,
     const size_t edgeCount, const std::vector<EdgePair>& intersectEdgePair,
-    double radius, bool invert) {
+    const ColliderContext& collider, double radius, bool invert) {
   std::vector<std::vector<TopoConnectionPair>> arcConnection(
       edgeCount, std::vector<TopoConnectionPair>());
 
@@ -534,8 +554,6 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
   std::vector<vec2> removedCircleCenter;
   std::vector<vec2> resultCircleCenter;
-
-  std::vector<TopoConnectionPair> globalFilletCircles;
 
   for (auto it = intersectEdgePair.begin(); it != intersectEdgePair.end();
        it++) {
@@ -580,6 +598,75 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     // NOTE: Calculate fillet intersection center
     filletCircles = Intersect(e1Points, e2Points, radius, invert);
     // TODO: use the intersection result to remove global collision.
+    for (auto it = filletCircles.begin(); it != filletCircles.end();) {
+      const auto& arc = *it;
+
+      manifold::Box box(toVec3(arc.CircleCenter - vec2(1, 0) * radius),
+                        toVec3(arc.CircleCenter + vec2(1, 0) * radius));
+
+      box.Union(toVec3(arc.CircleCenter - vec2(0, 1) * radius));
+      box.Union(toVec3(arc.CircleCenter + vec2(0, 1) * radius));
+
+      std::vector<Edge> rr;
+      auto recordCollision = [&](int, int edge) {
+        rr.push_back(collider.EdgeOld2NewVec[edge]);
+      };
+      auto recorder = MakeSimpleRecorder(recordCollision);
+
+      collider.MyCollider.Collisions(
+          manifold::Vec<manifold::Box>({box}).cview(), recorder);
+
+      bool eraseFlag = false;
+
+      for (auto it = rr.begin(); it != rr.end(); it++) {
+        const auto& edge = *it;
+        const size_t ei = edge.EdgeIndex, eLoopi = edge.LoopIndex;
+        const auto& eLoop = loops[eLoopi];
+
+        if (eLoopi == e1Loopi && ei == e1i)
+          continue;
+        else if (eLoopi == e2Loopi && ei == e2i)
+          continue;
+
+        const std::array<vec2, 3> ePoints{eLoop[ei],
+                                          eLoop[(ei + 1) % eLoop.size()],
+                                          eLoop[(ei + 2) % eLoop.size()]};
+
+        double distance =
+            distancePointSegment(arc.CircleCenter, ePoints[0], ePoints[1]);
+
+        if (std::abs(distance - radius) < EPSILON) {
+          // TODO: Intersected, this can be used to optimize speed for
+          // pre-detect all intersected point and avoid double processed
+        } else if (distance < radius) {
+          eraseFlag = true;
+          break;
+        }
+      }
+
+#ifdef MANIFOLD_DEBUG
+      if (ManifoldParams().verbose) {
+        if (eraseFlag) {
+          std::cout << "vRemove " << it->CircleCenter << std::endl;
+          std::cout << "std::array<size_t, 4> vBreakPoint{" << e1Loopi << ", "
+                    << e1i << ", " << e2Loopi << ", " << e2i << "}; "
+                    << std::endl;
+        } else {
+          std::cout << "vAdd " << it->CircleCenter << std::endl;
+          std::cout << "std::array<size_t, 4> vBreakPoint{" << e1Loopi << ", "
+                    << e1i << ", " << e2Loopi << ", " << e2i << "}; "
+                    << std::endl;
+        }
+      }
+#endif
+
+      if (eraseFlag) {
+        removedCircleCenter.push_back(it->CircleCenter);
+        it = filletCircles.erase(it);
+      } else {
+        it++;
+      }
+    }
 
     // NOTE: Map GeomTangentPair to TopoConnectionPair for Topo Building
     for (auto it = filletCircles.begin(); it != filletCircles.end(); it++) {
@@ -591,8 +678,6 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       it->RadValues = getRadPair(p1, p2, it->CircleCenter);
 
       auto pair = TopoConnectionPair(*it, e1i, e1Loopi, e2i, e2Loopi);
-
-      globalFilletCircles.push_back(pair);
 
       // Ensure Arc start and end direction fit the Loop direction.
       auto check = [&](const TopoConnectionPair& pair) -> bool {
@@ -651,191 +736,6 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       }
     }
 #endif
-  }
-
-  std::vector<std::set<double>> paramVec(edgeCount);
-  std::vector<size_t> perEdgeCount(edgeCount, 1);
-
-  for (auto it = globalFilletCircles.begin(); it != globalFilletCircles.end();
-       it++) {
-    size_t index0 = loopOffsetVec[it->LoopIndex[0]] + it->EdgeIndex[0],
-           index1 = loopOffsetVec[it->LoopIndex[1]] + it->EdgeIndex[1];
-
-    bool end0 = std::abs(it->ParameterValues[0] - 1.0) < EPSILON,
-         end1 = std::abs(it->ParameterValues[1] - 1.0) < EPSILON;
-
-    if (!end0) {
-      perEdgeCount[index0]++;
-
-      paramVec[index0].insert(it->ParameterValues[0]);
-    }
-    if (!end1) {
-      perEdgeCount[index1]++;
-      paramVec[index1].insert(it->ParameterValues[1]);
-    }
-  }
-
-  std::vector<size_t> prefixEdgeCount(edgeCount);
-  manifold::exclusive_scan(perEdgeCount.begin(), perEdgeCount.end(),
-                           prefixEdgeCount.begin());
-
-  const size_t newEdgeCount = prefixEdgeCount.back() + perEdgeCount.back();
-
-  std::vector<std::vector<size_t>> adjacentList(newEdgeCount);
-
-  for (size_t i = 0; i != loops.size(); i++) {
-    for (size_t j = 0; j != loops[i].size(); j++) {
-      size_t oldIdx = loopOffsetVec[i] + j;
-      size_t newEdgeSize = perEdgeCount[oldIdx];
-
-      for (size_t k = 0; k != newEdgeSize; k++) {
-        size_t newIdx = (prefixEdgeCount[oldIdx] + k);
-
-        if (j + 1 == loops[i].size() && k + 1 == newEdgeSize)
-          adjacentList[newIdx].push_back(loopOffsetVec[i]);
-        else
-          adjacentList[newIdx].push_back(newIdx + 1);
-      }
-    }
-  }
-
-  auto findNewIdx = [&](size_t loopIndex, size_t edgeIndex,
-                        double param) -> size_t {
-    size_t oldIdx = loopOffsetVec[loopIndex] + edgeIndex;
-
-    bool end = std::abs(param - 1.0) < EPSILON;
-    if (end) {
-      if (edgeIndex + 1 == loops[loopIndex].size())
-        return prefixEdgeCount[oldIdx];
-      else
-        return prefixEdgeCount[oldIdx] + perEdgeCount[oldIdx];
-    }
-
-    auto& vec = paramVec[oldIdx];
-
-    return prefixEdgeCount[oldIdx] + 1 +
-           std::distance(vec.begin(), std::find(vec.begin(), vec.end(), param));
-  };
-
-  // Ensure Arc start and end direction fit the Loop direction.
-  auto check = [&](const TopoConnectionPair& pair) -> bool {
-    const auto &e1Loop = loops[pair.LoopIndex[0]],
-               e2Loop = loops[pair.LoopIndex[1]];
-
-    size_t e1i = pair.EdgeIndex[0], e2i = pair.EdgeIndex[1];
-
-    const std::array<vec2, 3> e1Points{e1Loop[e1i],
-                                       e1Loop[(e1i + 1) % e1Loop.size()],
-                                       e1Loop[(e1i + 2) % e1Loop.size()]},
-        e2Points{e2Loop[e2i], e2Loop[(e2i + 1) % e2Loop.size()],
-                 e2Loop[(e2i + 2) % e2Loop.size()]};
-
-    vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
-                                        pair.ParameterValues[0]),
-         p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
-                                        pair.ParameterValues[1]);
-
-    vec2 n1 = p1 - pair.CircleCenter, n2 = p2 - pair.CircleCenter;
-    if (!invert) {
-      return la::cross(n1, n2) < EPSILON;
-    } else {
-      return la::cross(n1, n2) > EPSILON;
-    }
-
-    return false;
-  };
-
-  size_t idx = 0;
-  for (auto it = globalFilletCircles.begin(); it != globalFilletCircles.end();
-       it++) {
-    idx++;
-
-    auto pair = *it;
-    if (check(pair)) pair = pair.Swap();
-
-    if (pair.EdgeIndex[0] == 0 && pair.EdgeIndex[1] == 1) {
-      size_t i = 0;
-    }
-
-    size_t fromIdx = findNewIdx(pair.LoopIndex[0], pair.EdgeIndex[0],
-                                pair.ParameterValues[0]),
-           toIdx = findNewIdx(pair.LoopIndex[1], pair.EdgeIndex[1],
-                              pair.ParameterValues[1]);
-    adjacentList[fromIdx].push_back(toIdx);
-  }
-
-  // Helper function to find cycles in the adjacentList
-  auto getCycles = [&](const std::vector<std::vector<size_t>>& adj) {
-    size_t n = adj.size();
-    std::vector<std::vector<size_t>> cycles;
-
-    // 0: Unvisited, 1: Visiting (in stack), 2: Visited
-    std::vector<int> state(n, 0);
-    std::vector<size_t> parent(n, 0);
-    std::vector<size_t> edgeIter(n, 0);  // Tracks progress for each node
-    std::vector<size_t> stack;
-
-    stack.reserve(n);
-
-    for (size_t i = 0; i < n; ++i) {
-      if (state[i] != 0) continue;
-
-      stack.push_back(i);
-      state[i] = 1;
-
-      while (!stack.empty()) {
-        size_t u = stack.back();
-
-        if (edgeIter[u] < adj[u].size()) {
-          size_t v = adj[u][edgeIter[u]];
-          edgeIter[u]++;
-
-          if (state[v] == 1) {
-            // Found a cycle! Reconstruct path from u back to v
-            std::vector<size_t> currentCycle;
-            size_t curr = u;
-            while (curr != v) {
-              currentCycle.push_back(curr);
-              curr = parent[curr];
-            }
-            currentCycle.push_back(v);
-
-            // Reverse to get correct direction (v -> ... -> u)
-            std::reverse(currentCycle.begin(), currentCycle.end());
-            cycles.push_back(std::move(currentCycle));
-          } else if (state[v] == 0) {
-            state[v] = 1;
-            parent[v] = u;
-            stack.push_back(v);
-            continue;  // "Recurse" immediately
-          }
-        } else {
-          // Finished processing u
-          state[u] = 2;
-          stack.pop_back();
-        }
-      }
-    }
-    return cycles;
-  };
-
-  for (size_t i = 0; i != adjacentList.size(); i++) {
-    std::cout << i << " ";
-    for (size_t j = 0; j != adjacentList[i].size(); j++) {
-      std::cout << adjacentList[i][j] << " ";
-    }
-    std::cout << std::endl;
-  }
-  std::cout << std::endl;
-  std::cout << std::endl;
-
-  std::vector<std::vector<size_t>> resultCycles = getCycles(adjacentList);
-
-  for (size_t i = 0; i != resultCycles.size(); i++) {
-    for (size_t j = 0; j != resultCycles[i].size(); j++) {
-      std::cout << resultCycles[i][j] << " ";
-    }
-    std::cout << std::endl;
   }
 
 #ifdef MANIFOLD_DEBUG
@@ -1055,8 +955,9 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
 
   const size_t edgeCount = loopOffsetVec.back() + polygons.back().size();
 
-  const std::vector<EdgePair> edgePair =
-      Collisions(polygons, loopOffsetVec, radius, invert);
+  std::vector<EdgePair> edgePairVec;
+  const ColliderContext colliderContext =
+      BuildCollider(polygons, loopOffsetVec, edgePairVec, radius, invert);
 
 #ifdef MANIFOLD_DEBUG
   if (caseIndex == 0) SavePolygons("Testing/Fillet/input.txt", polygons);
@@ -1082,8 +983,9 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
 #endif
 
   // Calc all arc that bridge 2 edge
-  auto arcConnection = CalculateFilletArc(polygons, loopOffsetVec, edgeCount,
-                                          edgePair, radius, invert);
+  auto arcConnection =
+      CalculateFilletArc(polygons, loopOffsetVec, edgeCount, edgePairVec,
+                         colliderContext, radius, invert);
 
   int n = circularSegments > 2 ? circularSegments
                                : Quality::GetCircularSegments(radius);
