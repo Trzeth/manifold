@@ -68,7 +68,7 @@ struct EdgePair {
 };
 
 struct ColliderContext {
-  Collider Collider;
+  manifold::Collider Collider;
   std::vector<Edge> EdgeOld2NewVec;
 };
 
@@ -436,7 +436,7 @@ ColliderContext BuildCollider(const Polygons& polygons,
                               std::vector<EdgePair>& edgePairVec, double radius,
                               bool invert) {
   struct EdgeOld2New {
-    Box Box;
+    manifold::Box Box;
     uint32_t Morton;
     size_t LoopIndex;
     size_t EdgeIndex;
@@ -545,9 +545,6 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     const Polygons& loops, const std::vector<size_t>& loopOffsetVec,
     const size_t edgeCount, const std::vector<EdgePair>& intersectEdgePair,
     const ColliderContext& collider, double radius, bool invert) {
-  std::vector<std::vector<TopoConnectionPair>> arcConnection(
-      edgeCount, std::vector<TopoConnectionPair>());
-
   resultOutputFile << std::setprecision(
                           std::numeric_limits<double>::max_digits10)
                    << radius << std::endl;
@@ -602,20 +599,17 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     // Calculate fillet intersection center
     filletCircles = Intersect(e1Points, e2Points, radius, invert);
 
-    topoConnetionVec.reserve(filletCircles.size());
+    for (auto it = filletCircles.begin(); it != filletCircles.end(); it++) {
+      vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
+                                          it->ParameterValues[0]),
+           p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
+                                          it->ParameterValues[1]);
 
-    manifold::transform(
-        filletCircles.begin(), filletCircles.end(), topoConnetionVec.begin(),
-        [&](GeomTangentPair pair) {
-          vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
-                                              pair.ParameterValues[0]),
-               p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
-                                              pair.ParameterValues[1]);
+      it->RadValues = getRadPair(p1, p2, it->CircleCenter);
 
-          pair.RadValues = getRadPair(p1, p2, pair.CircleCenter);
-
-          return TopoConnectionPair(pair, e1i, e1Loopi, e2i, e2Loopi);
-        });
+      topoConnetionVec.emplace_back(
+          TopoConnectionPair(*it, e1i, e1Loopi, e2i, e2Loopi));
+    }
   }
 
   // NOTE: Cluster fillet circle to unify decision
@@ -627,11 +621,11 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     {
       struct TopoOld2New {
         size_t Index;
-        Box Box;
+        manifold::Box Box;
         uint32_t Morton;
       };
 
-      std::vector<TopoOld2New> topoOld2New;
+      std::vector<TopoOld2New> topoOld2New(topoConnetionVec.size());
 
       for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
            it++) {
@@ -643,7 +637,7 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
         size_t index = std::distance(topoConnetionVec.begin(), it);
         topoOld2New[index] =
-            TopoOld2New{size_t(), box, Collider::MortonCode(box.Center(), box)};
+            TopoOld2New{index, box, Collider::MortonCode(box.Center(), box)};
 
         circleBoxVec[index] = box;
       }
@@ -656,14 +650,14 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
       Vec<Box> boxVec;
       Vec<uint32_t> mortonVec;
-      boxVec.resize(topoConnetionVec.size());
       mortonVec.resize(topoConnetionVec.size());
+      boxVec.resize(topoConnetionVec.size());
 
-      manifold::transform(topoConnetionVec.begin(), topoConnetionVec.end(),
+      manifold::transform(topoOld2New.begin(), topoOld2New.end(),
                           boxVec.begin(),
                           [](const TopoOld2New& topo) { return topo.Box; });
 
-      manifold::transform(topoConnetionVec.begin(), topoConnetionVec.end(),
+      manifold::transform(topoOld2New.begin(), topoOld2New.end(),
                           mortonVec.begin(),
                           [](const TopoOld2New& topo) { return topo.Morton; });
 
@@ -686,6 +680,7 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     // Build cluster
     // FIXME: to ask is collider invertable? A->B but B not A?
     std::vector<size_t> cluster(topoConnetionVec.size());
+    const size_t NONCLUSTERIDX = topoConnetionVec.size();
     {
       for (auto it = clusterVec.begin(); it != clusterVec.end(); it++) {
         size_t index = std::distance(clusterVec.begin(), it);
@@ -706,7 +701,7 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     {
       auto markInvalidCircle = [&](int i, int j) {
         if (mark[j]) return;
-        if (mark[cluster[j]]) {
+        if (cluster[j] != NONCLUSTERIDX && mark[cluster[j]]) {
           mark[j] = 1;
           return;
         }
@@ -731,7 +726,8 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
         if (distance < radius) {
           mark[j] = 1;
-          mark[cluster[j]] = 1;
+
+          if (cluster[j] != NONCLUSTERIDX) mark[cluster[j]] = 1;
         }
       };
 
@@ -771,9 +767,13 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
   }
 
   // NOTE: Map GeomTangentPair to TopoConnectionPair for Topo Building
+
+  std::vector<std::vector<TopoConnectionPair>> arcConnection(
+      edgeCount, std::vector<TopoConnectionPair>());
+
   for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end(); it++) {
     // Cluster removed
-    if (mark[size_t(std::distance(it, topoConnetionVec.begin()))]) continue;
+    if (mark[size_t(std::distance(topoConnetionVec.begin(), it))]) continue;
 
     auto pair = *it;
 
@@ -1064,8 +1064,8 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
   resultOutputFile.open("Testing/Fillet/" + std::to_string(caseIndex) + ".txt");
   if (!resultOutputFile.is_open()) {
     std::cerr << "Error: Could not open file "
-              << std::to_string(caseIndex) + ".txt" << " for writing."
-              << std::endl;
+              << std::to_string(caseIndex) + ".txt"
+              << " for writing." << std::endl;
     throw std::exception();
   }
   caseIndex++;
