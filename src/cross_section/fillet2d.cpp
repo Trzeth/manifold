@@ -68,7 +68,7 @@ struct EdgePair {
 };
 
 struct ColliderContext {
-  Collider MyCollider;
+  Collider Collider;
   std::vector<Edge> EdgeOld2NewVec;
 };
 
@@ -436,7 +436,7 @@ ColliderContext BuildCollider(const Polygons& polygons,
                               std::vector<EdgePair>& edgePairVec, double radius,
                               bool invert) {
   struct EdgeOld2New {
-    manifold::Box Box;
+    Box Box;
     uint32_t Morton;
     size_t LoopIndex;
     size_t EdgeIndex;
@@ -533,7 +533,7 @@ ColliderContext BuildCollider(const Polygons& polygons,
   };
   auto recorder = MakeSimpleRecorder(recordCollision);
 
-  info.MyCollider.Collisions(filletBoxVec.cview(), recorder);
+  info.Collider.Collisions(filletBoxVec.cview(), recorder);
 
   edgePairVec.clear();
   edgePairVec = edgePair;
@@ -555,6 +555,10 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
   std::vector<vec2> removedCircleCenter;
   std::vector<vec2> resultCircleCenter;
 
+  std::vector<TopoConnectionPair> topoConnetionVec;
+
+  // NOTE: Calculate fillet circle center, output connect information to
+  // topoConnectionVec
   for (auto it = intersectEdgePair.begin(); it != intersectEdgePair.end();
        it++) {
     const size_t e1Loopi = it->LoopIndex[0], e1i = it->EdgeIndex[0],
@@ -595,147 +599,242 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
     std::vector<GeomTangentPair> filletCircles;
 
-    // NOTE: Calculate fillet intersection center
+    // Calculate fillet intersection center
     filletCircles = Intersect(e1Points, e2Points, radius, invert);
-    // TODO: use the intersection result to remove global collision.
-    for (auto it = filletCircles.begin(); it != filletCircles.end();) {
-      const auto& arc = *it;
 
-      manifold::Box box(toVec3(arc.CircleCenter - vec2(1, 0) * radius),
-                        toVec3(arc.CircleCenter + vec2(1, 0) * radius));
+    topoConnetionVec.reserve(filletCircles.size());
 
-      box.Union(toVec3(arc.CircleCenter - vec2(0, 1) * radius));
-      box.Union(toVec3(arc.CircleCenter + vec2(0, 1) * radius));
+    manifold::transform(
+        filletCircles.begin(), filletCircles.end(), topoConnetionVec.begin(),
+        [&](GeomTangentPair pair) {
+          vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
+                                              pair.ParameterValues[0]),
+               p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
+                                              pair.ParameterValues[1]);
 
-      std::vector<Edge> rr;
-      auto recordCollision = [&](int, int edge) {
-        rr.push_back(collider.EdgeOld2NewVec[edge]);
+          pair.RadValues = getRadPair(p1, p2, pair.CircleCenter);
+
+          return TopoConnectionPair(pair, e1i, e1Loopi, e2i, e2Loopi);
+        });
+  }
+
+  // NOTE: Cluster fillet circle to unify decision
+  std::vector<uint8_t> mark(topoConnetionVec.size(), 0);
+  {
+    // Find potential cluster circle
+    std::vector<std::vector<size_t>> clusterVec(topoConnetionVec.size());
+    Vec<Box> circleBoxVec(topoConnetionVec.size());
+    {
+      struct TopoOld2New {
+        size_t Index;
+        Box Box;
+        uint32_t Morton;
       };
+
+      std::vector<TopoOld2New> topoOld2New;
+
+      for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
+           it++) {
+        Box box(toVec3(it->CircleCenter - vec2(1, 0) * radius),
+                toVec3(it->CircleCenter + vec2(1, 0) * radius));
+
+        box.Union(toVec3(it->CircleCenter - vec2(0, 1) * radius));
+        box.Union(toVec3(it->CircleCenter + vec2(0, 1) * radius));
+
+        size_t index = std::distance(topoConnetionVec.begin(), it);
+        topoOld2New[index] =
+            TopoOld2New{size_t(), box, Collider::MortonCode(box.Center(), box)};
+
+        circleBoxVec[index] = box;
+      }
+
+      std::stable_sort(
+          topoOld2New.begin(), topoOld2New.end(),
+          [](const TopoOld2New& lhs, const TopoOld2New& rhs) -> bool {
+            return rhs.Morton > lhs.Morton;
+          });
+
+      Vec<Box> boxVec;
+      Vec<uint32_t> mortonVec;
+      boxVec.resize(topoConnetionVec.size());
+      mortonVec.resize(topoConnetionVec.size());
+
+      manifold::transform(topoConnetionVec.begin(), topoConnetionVec.end(),
+                          boxVec.begin(),
+                          [](const TopoOld2New& topo) { return topo.Box; });
+
+      manifold::transform(topoConnetionVec.begin(), topoConnetionVec.end(),
+                          mortonVec.begin(),
+                          [](const TopoOld2New& topo) { return topo.Morton; });
+
+      Collider circleCollider(boxVec, mortonVec);
+      auto recordCollision = [&](int i, int j) {
+        if (i == j) return;
+
+        vec2 dis = topoConnetionVec[topoOld2New[i].Index].CircleCenter -
+                   topoConnetionVec[topoOld2New[j].Index].CircleCenter;
+
+        if (la::dot(dis, dis) <= EPSILON * EPSILON)
+          clusterVec[topoOld2New[i].Index].push_back(topoOld2New[j].Index);
+      };
+
       auto recorder = MakeSimpleRecorder(recordCollision);
 
-      collider.MyCollider.Collisions(
-          manifold::Vec<manifold::Box>({box}).cview(), recorder);
+      circleCollider.Collisions(boxVec.cview(), recorder);
+    }
 
-      bool eraseFlag = false;
+    // Build cluster
+    // FIXME: to ask is collider invertable? A->B but B not A?
+    std::vector<size_t> cluster(topoConnetionVec.size());
+    {
+      for (auto it = clusterVec.begin(); it != clusterVec.end(); it++) {
+        size_t index = std::distance(clusterVec.begin(), it);
 
-      for (auto it = rr.begin(); it != rr.end(); it++) {
-        const auto& edge = *it;
-        const size_t ei = edge.EdgeIndex, eLoopi = edge.LoopIndex;
+        if (it->empty()) {
+          // Set topoConnetionVec.size() as non cluster
+          cluster[index] = topoConnetionVec.size();
+          continue;
+        }
+
+        for (auto itt = it->begin(); itt != it->end(); itt++) {
+          cluster[index] = std::min(index, *itt);
+        }
+      }
+    }
+
+    // If circle is invalid, mark is set to 1
+    {
+      auto markInvalidCircle = [&](int i, int j) {
+        if (mark[j]) return;
+        if (mark[cluster[j]]) {
+          mark[j] = 1;
+          return;
+        }
+
+        const TopoConnectionPair& pair = topoConnetionVec[j];
+
+        const size_t ei = collider.EdgeOld2NewVec[i].EdgeIndex,
+                     eLoopi = collider.EdgeOld2NewVec[i].LoopIndex;
         const auto& eLoop = loops[eLoopi];
 
-        if (eLoopi == e1Loopi && ei == e1i)
-          continue;
-        else if (eLoopi == e2Loopi && ei == e2i)
-          continue;
+        if (eLoopi == pair.LoopIndex[0] && ei == pair.EdgeIndex[0])
+          return;
+        else if (eLoopi == pair.LoopIndex[1] && ei == pair.EdgeIndex[1])
+          return;
 
         const std::array<vec2, 3> ePoints{eLoop[ei],
                                           eLoop[(ei + 1) % eLoop.size()],
                                           eLoop[(ei + 2) % eLoop.size()]};
 
         double distance =
-            distancePointSegment(arc.CircleCenter, ePoints[0], ePoints[1]);
+            distancePointSegment(pair.CircleCenter, ePoints[0], ePoints[1]);
 
-        if (std::abs(distance - radius) < EPSILON) {
-          // TODO: Intersected, this can be used to optimize speed for
-          // pre-detect all intersected point and avoid double processed
-        } else if (distance < radius) {
-          eraseFlag = true;
-          break;
+        if (distance < radius) {
+          mark[j] = 1;
+          mark[cluster[j]] = 1;
         }
-      }
-
-#ifdef MANIFOLD_DEBUG
-      if (ManifoldParams().verbose) {
-        if (eraseFlag) {
-          std::cout << "vRemove " << it->CircleCenter << std::endl;
-          std::cout << "std::array<size_t, 4> vBreakPoint{" << e1Loopi << ", "
-                    << e1i << ", " << e2Loopi << ", " << e2i << "}; "
-                    << std::endl;
-        } else {
-          std::cout << "vAdd " << it->CircleCenter << std::endl;
-          std::cout << "std::array<size_t, 4> vBreakPoint{" << e1Loopi << ", "
-                    << e1i << ", " << e2Loopi << ", " << e2i << "}; "
-                    << std::endl;
-        }
-      }
-#endif
-
-      if (eraseFlag) {
-        removedCircleCenter.push_back(it->CircleCenter);
-        it = filletCircles.erase(it);
-      } else {
-        it++;
-      }
-    }
-
-    // NOTE: Map GeomTangentPair to TopoConnectionPair for Topo Building
-    for (auto it = filletCircles.begin(); it != filletCircles.end(); it++) {
-      vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
-                                          it->ParameterValues[0]),
-           p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
-                                          it->ParameterValues[1]);
-
-      it->RadValues = getRadPair(p1, p2, it->CircleCenter);
-
-      auto pair = TopoConnectionPair(*it, e1i, e1Loopi, e2i, e2Loopi);
-
-      // Ensure Arc start and end direction fit the Loop direction.
-      auto check = [&](const TopoConnectionPair& pair) -> bool {
-        vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
-                                            pair.ParameterValues[0]),
-             p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
-                                            pair.ParameterValues[1]);
-
-        vec2 n1 = p1 - pair.CircleCenter, n2 = p2 - pair.CircleCenter;
-        if (!invert) {
-          return la::cross(n1, n2) < EPSILON;
-        } else {
-          return la::cross(n1, n2) > EPSILON;
-        }
-
-        return false;
       };
 
-      if (check(pair)) pair = pair.Swap();
+      auto recorder = MakeSimpleRecorder(markInvalidCircle);
 
-      size_t index = loopOffsetVec[pair.LoopIndex[0]] + pair.EdgeIndex[0];
-
-      // Sort by ParameterValue, if on the end then sort by rotate degree
-      auto order = [&](const TopoConnectionPair& a,
-                       const TopoConnectionPair& b) {
-        if (a.ParameterValues[0] < b.ParameterValues[0] - EPSILON) return true;
-        if (a.ParameterValues[0] > b.ParameterValues[0] + EPSILON) return false;
-
-        bool aEnd = std::abs(a.ParameterValues[0] - 1.0) < EPSILON;
-        bool bEnd = std::abs(b.ParameterValues[0] - 1.0) < EPSILON;
-
-        if (aEnd && bEnd) {
-          auto n1 = a.CircleCenter - e1Points[1];
-          auto n2 = b.CircleCenter - e1Points[1];
-          double det = la::cross(n1, n2);
-
-          return !invert ? (det < EPSILON) : (det > EPSILON);
-        }
-
-        return false;
-      };
-
-      auto itt =
-          std::find_if(arcConnection[index].begin(), arcConnection[index].end(),
-                       [&](const TopoConnectionPair& ele) -> bool {
-                         return order(pair, ele);
-                       });
-
-      arcConnection[index].insert(itt, pair);
+      collider.Collider.Collisions(circleBoxVec.cview(), recorder);
     }
 
 #ifdef MANIFOLD_DEBUG
     if (ManifoldParams().verbose) {
-      for (const auto& e : filletCircles) {
-        resultCircleCenter.push_back(e.CircleCenter);
+      for (size_t j = 0; j != clusterVec.size(); j++) {
+        if (clusterVec[j].empty()) continue;
+
+        std::cout << "Cluster " << j << ": ";
+        for (size_t i = 0; i != clusterVec[j].size(); i++) {
+          std::cout << clusterVec[j][i] << " ";
+        }
+
+        std::cout << std::endl;
+      }
+
+      for (size_t i = 0; i != topoConnetionVec.size(); i++) {
+        if (mark[i]) {
+          std::cout << "Removed " << topoConnetionVec[i].CircleCenter
+                    << " cluster " << cluster[i] << std::endl;
+
+          removedCircleCenter.push_back(topoConnetionVec[i].CircleCenter);
+        } else {
+          std::cout << "Added " << topoConnetionVec[i].CircleCenter
+                    << " cluster " << cluster[i] << std::endl;
+
+          resultCircleCenter.push_back(topoConnetionVec[i].CircleCenter);
+        }
       }
     }
 #endif
+  }
+
+  // NOTE: Map GeomTangentPair to TopoConnectionPair for Topo Building
+  for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end(); it++) {
+    // Cluster removed
+    if (mark[size_t(std::distance(it, topoConnetionVec.begin()))]) continue;
+
+    auto pair = *it;
+
+    const size_t e1Loopi = it->LoopIndex[0], e1i = it->EdgeIndex[0],
+                 e2Loopi = it->LoopIndex[1], e2i = it->EdgeIndex[1];
+
+    const auto &e1Loop = loops[e1Loopi], e2Loop = loops[e2Loopi];
+
+    const std::array<vec2, 3> e1Points{e1Loop[e1i],
+                                       e1Loop[(e1i + 1) % e1Loop.size()],
+                                       e1Loop[(e1i + 2) % e1Loop.size()]},
+        e2Points{e2Loop[e2i], e2Loop[(e2i + 1) % e2Loop.size()],
+                 e2Loop[(e2i + 2) % e2Loop.size()]};
+
+    // Ensure Arc start and end direction fit the Loop direction.
+    auto check = [&](const TopoConnectionPair& pair) -> bool {
+      vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1],
+                                          pair.ParameterValues[0]),
+           p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1],
+                                          pair.ParameterValues[1]);
+
+      vec2 n1 = p1 - pair.CircleCenter, n2 = p2 - pair.CircleCenter;
+      if (!invert) {
+        return la::cross(n1, n2) < EPSILON;
+      } else {
+        return la::cross(n1, n2) > EPSILON;
+      }
+
+      return false;
+    };
+
+    if (check(pair)) pair = pair.Swap();
+
+    size_t index = loopOffsetVec[pair.LoopIndex[0]] + pair.EdgeIndex[0];
+
+    // Sort by ParameterValue, if on the end then sort by rotate degree
+    auto order = [&](const TopoConnectionPair& a, const TopoConnectionPair& b) {
+      if (a.ParameterValues[0] < b.ParameterValues[0] - EPSILON) return true;
+      if (a.ParameterValues[0] > b.ParameterValues[0] + EPSILON) return false;
+
+      bool aEnd = std::abs(a.ParameterValues[0] - 1.0) < EPSILON;
+      bool bEnd = std::abs(b.ParameterValues[0] - 1.0) < EPSILON;
+
+      if (aEnd && bEnd) {
+        auto n1 = a.CircleCenter - e1Points[1];
+        auto n2 = b.CircleCenter - e1Points[1];
+        double det = la::cross(n1, n2);
+
+        return !invert ? (det < EPSILON) : (det > EPSILON);
+      }
+
+      return false;
+    };
+
+    auto itt =
+        std::find_if(arcConnection[index].begin(), arcConnection[index].end(),
+                     [&](const TopoConnectionPair& ele) -> bool {
+                       return order(pair, ele);
+                     });
+
+    arcConnection[index].insert(itt, pair);
   }
 
 #ifdef MANIFOLD_DEBUG
