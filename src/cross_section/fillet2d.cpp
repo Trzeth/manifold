@@ -665,11 +665,13 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       auto recordCollision = [&](int i, int j) {
         if (i == j) return;
 
-        vec2 dis = topoConnetionVec[topoOld2New[i].Index].CircleCenter -
-                   topoConnetionVec[topoOld2New[j].Index].CircleCenter;
+        size_t ii = topoOld2New[i].Index, jj = topoOld2New[j].Index;
+
+        vec2 dis = topoConnetionVec[ii].CircleCenter -
+                   topoConnetionVec[jj].CircleCenter;
 
         if (la::dot(dis, dis) <= EPSILON * EPSILON)
-          clusterVec[topoOld2New[i].Index].push_back(topoOld2New[j].Index);
+          clusterVec[ii].push_back(jj);
       };
 
       auto recorder = MakeSimpleRecorder(recordCollision);
@@ -700,16 +702,16 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     // If circle is invalid, mark is set to 1
     {
       auto markInvalidCircle = [&](int i, int j) {
-        if (mark[j]) return;
-        if (cluster[j] != NONCLUSTERIDX && mark[cluster[j]]) {
-          mark[j] = 1;
+        if (mark[i]) return;
+        if (cluster[i] != NONCLUSTERIDX && mark[cluster[i]]) {
+          mark[i] = 1;
           return;
         }
 
-        const TopoConnectionPair& pair = topoConnetionVec[j];
+        const TopoConnectionPair& pair = topoConnetionVec[i];
 
-        const size_t ei = collider.EdgeOld2NewVec[i].EdgeIndex,
-                     eLoopi = collider.EdgeOld2NewVec[i].LoopIndex;
+        const size_t ei = collider.EdgeOld2NewVec[j].EdgeIndex,
+                     eLoopi = collider.EdgeOld2NewVec[j].LoopIndex;
         const auto& eLoop = loops[eLoopi];
 
         if (eLoopi == pair.LoopIndex[0] && ei == pair.EdgeIndex[0])
@@ -725,9 +727,9 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
             distancePointSegment(pair.CircleCenter, ePoints[0], ePoints[1]);
 
         if (distance < radius) {
-          mark[j] = 1;
+          mark[i] = 1;
 
-          if (cluster[j] != NONCLUSTERIDX) mark[cluster[j]] = 1;
+          if (cluster[i] != NONCLUSTERIDX) mark[cluster[i]] = 1;
         }
       };
 
