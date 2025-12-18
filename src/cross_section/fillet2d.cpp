@@ -949,7 +949,12 @@ std::vector<CrossSection> Tracing(
         break;
       }
 
-      const auto pts = discreteArcToPoint(arc, radius, circularSegments);
+      auto pts = discreteArcToPoint(arc, radius, circularSegments);
+
+      const vec2 dis = *tracingLoop.rbegin() - *pts.begin();
+
+      if (la::dot(dis, dis) <= EPSILON) pts.erase(pts.begin());
+
       tracingLoop.insert(tracingLoop.end(), pts.begin(), pts.end());
 
       current = {arc.EdgeIndex[1], arc.LoopIndex[1], arc.ParameterValues[1]};
@@ -1066,8 +1071,8 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
   resultOutputFile.open("Testing/Fillet/" + std::to_string(caseIndex) + ".txt");
   if (!resultOutputFile.is_open()) {
     std::cerr << "Error: Could not open file "
-              << std::to_string(caseIndex) + ".txt"
-              << " for writing." << std::endl;
+              << std::to_string(caseIndex) + ".txt" << " for writing."
+              << std::endl;
     throw std::exception();
   }
   caseIndex++;
