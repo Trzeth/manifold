@@ -211,9 +211,7 @@ namespace {
 const double MIN_LEN_SQ = 1e-12;
 
 bool isConvex(const std::array<vec2, 3>& e) {
-  float val = la::cross(e[1] - e[0], e[2] - e[1]);
-
-  return val > EPSILON;
+  return la::cross(e[1] - e[0], e[2] - e[1]) > EPSILON;
 }
 
 bool isVectorInSector(vec2 v, vec2 start, vec2 end, bool CCW) {
@@ -612,89 +610,108 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     }
   }
 
+  if (topoConnetionVec.empty())
+    return std::vector<std::vector<TopoConnectionPair>>();
+
   // NOTE: Cluster fillet circle to unify decision
   std::vector<uint8_t> mark(topoConnetionVec.size(), 0);
   {
-    // Find potential cluster circle
-    std::vector<std::vector<size_t>> clusterVec(topoConnetionVec.size());
-    Vec<Box> circleBoxVec(topoConnetionVec.size());
-    {
-      struct TopoOld2New {
-        size_t Index;
-        manifold::Box Box;
-        uint32_t Morton;
-      };
-
-      std::vector<TopoOld2New> topoOld2New(topoConnetionVec.size());
-
-      for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
-           it++) {
-        Box box(toVec3(it->CircleCenter - vec2(1, 0) * radius),
-                toVec3(it->CircleCenter + vec2(1, 0) * radius));
-
-        box.Union(toVec3(it->CircleCenter - vec2(0, 1) * radius));
-        box.Union(toVec3(it->CircleCenter + vec2(0, 1) * radius));
-
-        size_t index = std::distance(topoConnetionVec.begin(), it);
-        topoOld2New[index] =
-            TopoOld2New{index, box, Collider::MortonCode(box.Center(), box)};
-
-        circleBoxVec[index] = box;
-      }
-
-      std::stable_sort(
-          topoOld2New.begin(), topoOld2New.end(),
-          [](const TopoOld2New& lhs, const TopoOld2New& rhs) -> bool {
-            return rhs.Morton > lhs.Morton;
-          });
-
-      Vec<Box> boxVec;
-      Vec<uint32_t> mortonVec;
-      mortonVec.resize(topoConnetionVec.size());
-      boxVec.resize(topoConnetionVec.size());
-
-      manifold::transform(topoOld2New.begin(), topoOld2New.end(),
-                          boxVec.begin(),
-                          [](const TopoOld2New& topo) { return topo.Box; });
-
-      manifold::transform(topoOld2New.begin(), topoOld2New.end(),
-                          mortonVec.begin(),
-                          [](const TopoOld2New& topo) { return topo.Morton; });
-
-      Collider circleCollider(boxVec, mortonVec);
-      auto recordCollision = [&](int i, int j) {
-        if (i == j) return;
-
-        size_t ii = topoOld2New[i].Index, jj = topoOld2New[j].Index;
-
-        vec2 dis = topoConnetionVec[ii].CircleCenter -
-                   topoConnetionVec[jj].CircleCenter;
-
-        if (la::dot(dis, dis) <= EPSILON * EPSILON)
-          clusterVec[ii].push_back(jj);
-      };
-
-      auto recorder = MakeSimpleRecorder(recordCollision);
-
-      circleCollider.Collisions(boxVec.cview(), recorder);
-    }
-
-    // Build cluster
-    // FIXME: to ask is collider invertable? A->B but B not A?
     std::vector<size_t> cluster(topoConnetionVec.size());
     const size_t NONCLUSTERIDX = topoConnetionVec.size();
-    {
-      for (auto it = clusterVec.begin(); it != clusterVec.end(); it++) {
-        size_t index = std::distance(clusterVec.begin(), it);
+    Vec<Box> circleBoxVec(topoConnetionVec.size());
 
-        if (it->empty()) {
-          // Set topoConnetionVec.size() as non cluster
-          cluster[index] = topoConnetionVec.size();
-          continue;
+    // Avoid collider error
+    if (topoConnetionVec.size() == 1) {
+      cluster[0] = 1;
+
+      vec2 center = topoConnetionVec[0].CircleCenter;
+      Box box(toVec3(center - vec2(1, 0) * radius),
+              toVec3(center + vec2(1, 0) * radius));
+
+      box.Union(toVec3(center - vec2(0, 1) * radius));
+      box.Union(toVec3(center + vec2(0, 1) * radius));
+
+      circleBoxVec[0] = box;
+    } else {
+      // Find potential cluster circle
+      std::vector<std::vector<size_t>> clusterVec(topoConnetionVec.size());
+      {
+        struct TopoOld2New {
+          size_t Index;
+          manifold::Box Box;
+          uint32_t Morton;
+        };
+
+        std::vector<TopoOld2New> topoOld2New(topoConnetionVec.size());
+
+        for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
+             it++) {
+          Box box(toVec3(it->CircleCenter - vec2(1, 0) * radius),
+                  toVec3(it->CircleCenter + vec2(1, 0) * radius));
+
+          box.Union(toVec3(it->CircleCenter - vec2(0, 1) * radius));
+          box.Union(toVec3(it->CircleCenter + vec2(0, 1) * radius));
+
+          size_t index = std::distance(topoConnetionVec.begin(), it);
+          topoOld2New[index] =
+              TopoOld2New{index, box, Collider::MortonCode(box.Center(), box)};
+
+          circleBoxVec[index] = box;
         }
 
-        for (auto itt = it->begin(); itt != it->end(); itt++) {
-          cluster[index] = std::min(index, *itt);
+        std::stable_sort(
+            topoOld2New.begin(), topoOld2New.end(),
+            [](const TopoOld2New& lhs, const TopoOld2New& rhs) -> bool {
+              return rhs.Morton > lhs.Morton;
+            });
+
+        Vec<Box> boxVec;
+        Vec<uint32_t> mortonVec;
+        mortonVec.resize(topoConnetionVec.size());
+        boxVec.resize(topoConnetionVec.size());
+
+        manifold::transform(topoOld2New.begin(), topoOld2New.end(),
+                            boxVec.begin(),
+                            [](const TopoOld2New& topo) { return topo.Box; });
+
+        manifold::transform(
+            topoOld2New.begin(), topoOld2New.end(), mortonVec.begin(),
+            [](const TopoOld2New& topo) { return topo.Morton; });
+
+        Collider circleCollider(boxVec, mortonVec);
+        auto recordCollision = [&](int i, int j) {
+          if (i == j) return;
+
+          size_t ii = topoOld2New[i].Index, jj = topoOld2New[j].Index;
+
+          vec2 dis = topoConnetionVec[ii].CircleCenter -
+                     topoConnetionVec[jj].CircleCenter;
+
+          if (la::dot(dis, dis) <= EPSILON * EPSILON)
+            clusterVec[ii].push_back(jj);
+        };
+
+        auto recorder = MakeSimpleRecorder(recordCollision);
+
+        circleCollider.Collisions(boxVec.cview(), recorder);
+      }
+
+      // Build cluster
+      // FIXME: to ask is collider invertable? A->B but B not A?
+
+      {
+        for (auto it = clusterVec.begin(); it != clusterVec.end(); it++) {
+          size_t index = std::distance(clusterVec.begin(), it);
+
+          if (it->empty()) {
+            // Set topoConnetionVec.size() as non cluster
+            cluster[index] = topoConnetionVec.size();
+            continue;
+          }
+
+          for (auto itt = it->begin(); itt != it->end(); itt++) {
+            cluster[index] = std::min(index, *itt);
+          }
         }
       }
     }
@@ -740,16 +757,16 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
 #ifdef MANIFOLD_DEBUG
     if (ManifoldParams().verbose) {
-      for (size_t j = 0; j != clusterVec.size(); j++) {
-        if (clusterVec[j].empty()) continue;
+      // for (size_t j = 0; j != clusterVec.size(); j++) {
+      //   if (clusterVec[j].empty()) continue;
 
-        std::cout << "Cluster " << j << ": ";
-        for (size_t i = 0; i != clusterVec[j].size(); i++) {
-          std::cout << clusterVec[j][i] << " ";
-        }
+      //   std::cout << "Cluster " << j << ": ";
+      //   for (size_t i = 0; i != clusterVec[j].size(); i++) {
+      //     std::cout << clusterVec[j][i] << " ";
+      //   }
 
-        std::cout << std::endl;
-      }
+      //   std::cout << std::endl;
+      // }
 
       for (size_t i = 0; i != topoConnetionVec.size(); i++) {
         if (mark[i]) {
@@ -881,6 +898,7 @@ std::vector<CrossSection> Tracing(
   struct EdgeLoopPair {
     size_t EdgeIndex, LoopIndex;
     double ParameterValue;
+    vec2 CircleCenter;
 
     bool operator==(const EdgeLoopPair& o) {
       return (EdgeIndex == o.EdgeIndex) && (LoopIndex == o.LoopIndex) &&
@@ -918,7 +936,7 @@ std::vector<CrossSection> Tracing(
     loopFlag[startIt->LoopIndex[1]] = 1;
 
     EdgeLoopPair current{startIt->EdgeIndex[1], startIt->LoopIndex[1],
-                         startIt->ParameterValues[1]};
+                         startIt->ParameterValues[1], startIt->CircleCenter};
 
     while (true) {
       // Trace to find next arc on current edge
@@ -929,6 +947,27 @@ std::vector<CrossSection> Tracing(
                                return ele.ParameterValues[0] + EPSILON >
                                       current.ParameterValue;
                              });
+
+      // Pre arc and next arc start and end at same point, need to check
+      // orientation
+      if (it != currentEdge.end()) {
+        bool bothStart = (current.ParameterValue < EPSILON &&
+                          it->ParameterValues[0] < EPSILON),
+             bothEnd = (std::abs(current.ParameterValue - 1.0) < EPSILON &&
+                        std::abs(it->ParameterValues[0] - 1.0) < EPSILON);
+
+        if (bothStart || bothEnd) {
+          const vec2 p = loops[current.LoopIndex][current.EdgeIndex];
+          if (la::dot(it->CircleCenter - p, current.CircleCenter - p) >
+              EPSILON) {
+            it = std::find_if(it + 1, currentEdge.end(),
+                              [current](const TopoConnectionPair& ele) -> bool {
+                                return ele.ParameterValues[0] + EPSILON >
+                                       current.ParameterValue;
+                              });
+          }
+        }
+      }
 
       // Not found, just go to next edge
       if (it == currentEdge.end()) {
@@ -966,11 +1005,13 @@ std::vector<CrossSection> Tracing(
   CrossSection hole;
 
   for (size_t i = 0; i != loops.size(); i++) {
-    if (loopFlag[i] == 0 &&
-        (CrossSection(Polygons{loops[i]}).Area() > EPSILON)) {
-      SimplePolygon loop = loops[i];
-      std::reverse(loop.begin(), loop.end());
-      hole = hole.Boolean(CrossSection(Polygons{loop}), manifold::OpType::Add);
+    SimplePolygon loop = loops[i];
+    std::reverse(loop.begin(), loop.end());
+    CrossSection cs = loop;
+    double area = cs.Area();
+
+    if (loopFlag[i] == 0 && area > EPSILON) {
+      hole = hole.Boolean(cs, manifold::OpType::Add);
     }
   }
 
@@ -979,6 +1020,7 @@ std::vector<CrossSection> Tracing(
     result.push_back(
         CrossSection(Polygons{*it}).Boolean(hole, manifold::OpType::Subtract));
   }
+
 #ifdef MANIFOLD_DEBUG
   if (ManifoldParams().verbose) {
     std::cout << "Result loop count:" << resultLoops.size() << std::endl;
