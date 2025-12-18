@@ -121,7 +121,7 @@ bool TestFillet(const Polygons& polys, CrossSection input, double radius,
 
   // Use the result run again, check the result is almost same.
   // Check idempotent
-  if (true) {
+  if (false) {
     auto rr = rc.Fillet(radius, circularSegments);
     auto rrc = manifold::CrossSection::Compose(rr);
 
@@ -132,16 +132,49 @@ bool TestFillet(const Polygons& polys, CrossSection input, double radius,
 };
 
 void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
-  manifold::ManifoldParams().verbose = false;
   std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
 
   const int inputCircularSegments = 20;
   const CrossSection input = CrossSection(polys);
 
 #ifdef MANIFOLD_DEBUG
-  if (false) {
-    double radius = 0.5;
+  int idx = 1;
+
+  if (idx == 0) {
+    manifold::ManifoldParams().verbose = true;
+
+    double radius = 0.10000000000000001;
     TestFillet(polys, input, radius, inputCircularSegments);
+  } else if (idx == 1) {
+    auto bbox = input.Bounds().Size();
+
+    double min = std::min(bbox.x, bbox.y), max = std::max(bbox.x, bbox.y);
+
+    std::vector<double> radiusVec;
+    if (true) {
+      std::array<double, 6> multipliers{1E-4, 1E-3, 1E-2, 0.1, 0.5, 1};
+      // std::array<double, 1> multipliers{1E-3};
+      for (auto it = multipliers.begin(); it != multipliers.end(); it++) {
+        double mmin = *it * min, mmax = *it * max;
+        if (std::abs(mmin - mmax) < 1E-6) {
+          radiusVec.push_back(mmin);
+          // radiusVec.push_back(-1.0 * mmin);
+        } else {
+          radiusVec.push_back(min);
+          // radiusVec.push_back(max);
+
+          // radiusVec.push_back(-1.0 * mmin);
+          // radiusVec.push_back(-1.0 * mmax);
+        }
+      }
+    } else {
+      radiusVec.push_back(0.7);
+    }
+
+    std::sort(radiusVec.begin(), radiusVec.end());
+
+    for (auto it = radiusVec.begin(); it != radiusVec.end(); it++)
+      TestFillet(polys, input, *it, inputCircularSegments);
   } else {
 #endif
 
@@ -156,10 +189,12 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
 
     // Maximum attempt 20 times
     // Early stop if 10 case result non zero.
-    for (size_t i = 0, j = 0; i != 20 && j != 10; i++) {
+
+    const size_t MAXIMUM = 100, EARLYSTOP = 100;
+    for (size_t i = 0, j = 0; i != MAXIMUM && j != EARLYSTOP; i++) {
       double mid = low + (high - low) * 0.5;
 
-      if (std::abs(low - mid) < 1E-6) break;
+      // if (std::abs(low - mid) < 1E-12) break;
 
       // Area non zero
       if (TestFillet(polys, input, mid, inputCircularSegments)) {
@@ -170,6 +205,8 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
       }
     }
 
+    return;
+
     // Testing Negative Radius
 
     low = -1E-6, high = -0.8 * min;
@@ -178,7 +215,7 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
 
     // Maximum attempt 20 times
     // Early stop if 10 case result non zero.
-    for (size_t i = 0, j = 0; i != 20 && j != 10; i++) {
+    for (size_t i = 0, j = 0; i != MAXIMUM && j != EARLYSTOP; i++) {
       double mid = low + (high - low) * 0.5;
 
       // Area non zero
@@ -289,10 +326,10 @@ void RegisterPolygonTests() {
 }
 
 void RegisterFilletTests() {
-  // std::string files[] = {"fillet.txt", "polygon_corpus.txt", "sponge.txt",
-  //                        "zebra.txt", "zebra3.txt"};
+  std::string files[] = {"fillet.txt", "polygon_corpus.txt", "sponge.txt",
+                         "zebra.txt", "zebra3.txt"};
 
-  std::string files[] = {"fillet.txt"};
+  // std::string files[] = {"fillet.txt"};
 
 #ifdef __EMSCRIPTEN__
   for (auto f : files) RegisterPolygonTestsFile("/polygons/" + f);
