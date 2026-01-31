@@ -435,6 +435,7 @@ def plot_circle_centers(ax, centers: List[List[float]], color: str, label: str, 
 
 if __name__ == "__main__":
     input_file = "Testing/Fillet/input.txt" # Hardcoded as per request
+    min_file_index = 0
     max_file_index = 10      # Hardcoded scan from 0 to 10
 
     # --- Read Input Data ONCE ---
@@ -447,7 +448,7 @@ if __name__ == "__main__":
     # --- Collect all valid result files first ---
     results_to_plot = []
     print("Scanning for result files (0.txt to 10.txt)...")
-    for i in range(max_file_index + 1):
+    for i in range(min_file_index, max_file_index + 1):
         result_file = f"Testing/Fillet/{i}.txt"
         radius, removed, fillet, res_data = read_circles_and_results(result_file)
         
