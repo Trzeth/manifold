@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#define _USE_MATH_DEFINES
+
 #include "manifold/polygon.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 
@@ -138,7 +141,7 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
   const CrossSection input = CrossSection(polys);
 
 #ifdef MANIFOLD_DEBUG
-  int idx = 1;
+  int idx = 2;
 
   if (idx == 0) {
     manifold::ManifoldParams().verbose = true;
@@ -194,7 +197,7 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
     for (size_t i = 0, j = 0; i != MAXIMUM && j != EARLYSTOP; i++) {
       double mid = low + (high - low) * 0.5;
 
-      // if (std::abs(low - mid) < 1E-12) break;
+      if (std::abs(low - mid) < 1E-12) break;
 
       // Area non zero
       if (TestFillet(polys, input, mid, inputCircularSegments)) {
