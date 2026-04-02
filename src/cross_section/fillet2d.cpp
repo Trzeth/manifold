@@ -569,47 +569,55 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
   // topoConnectionVec
   for (auto it = intersectEdgePair.begin(); it != intersectEdgePair.end();
        it++) {
-    const size_t e1Loopi_orig = it->LoopIndex[0], e1i_orig = it->EdgeIndex[0],
-                 e2Loopi_orig = it->LoopIndex[1], e2i_orig = it->EdgeIndex[1];
+    const size_t edge1InputLoopIdx = it->LoopIndex[0],
+                 edge1InputIdx = it->EdgeIndex[0],
+                 edge2InputLoopIdx = it->LoopIndex[1],
+                 edge2InputIdx = it->EdgeIndex[1];
 
     // Step 1.2: Canonical ordering — smaller global edge ID is always e1
-    const size_t globalId1 = loopOffsetVec[e1Loopi_orig] + e1i_orig;
-    const size_t globalId2 = loopOffsetVec[e2Loopi_orig] + e2i_orig;
+    const size_t globalId1 = loopOffsetVec[edge1InputLoopIdx] + edge1InputIdx;
+    const size_t globalId2 = loopOffsetVec[edge2InputLoopIdx] + edge2InputIdx;
     const bool swapped = globalId1 > globalId2;
 
-    const size_t e1Loopi = swapped ? e2Loopi_orig : e1Loopi_orig,
-                 e1i = swapped ? e2i_orig : e1i_orig,
-                 e2Loopi = swapped ? e1Loopi_orig : e2Loopi_orig,
-                 e2i = swapped ? e1i_orig : e2i_orig;
+    const size_t edge1LoopIdx =
+                     swapped ? edge2InputLoopIdx : edge1InputLoopIdx,
+                 edge1Idx = swapped ? edge2InputIdx : edge1InputIdx,
+                 edge2LoopIdx =
+                     swapped ? edge1InputLoopIdx : edge2InputLoopIdx,
+                 edge2Idx = swapped ? edge1InputIdx : edge2InputIdx;
 
-    const auto &e1Loop = loops[e1Loopi], e2Loop = loops[e2Loopi];
+    const auto &edge1Loop = loops[edge1LoopIdx],
+               &edge2Loop = loops[edge2LoopIdx];
 
-    const std::array<vec2, 3> e1Points{e1Loop[e1i],
-                                       e1Loop[(e1i + 1) % e1Loop.size()],
-                                       e1Loop[(e1i + 2) % e1Loop.size()]},
-        e2Points{e2Loop[e2i], e2Loop[(e2i + 1) % e2Loop.size()],
-                 e2Loop[(e2i + 2) % e2Loop.size()]};
+    const std::array<vec2, 3> edge1Points{
+        edge1Loop[edge1Idx], edge1Loop[(edge1Idx + 1) % edge1Loop.size()],
+        edge1Loop[(edge1Idx + 2) % edge1Loop.size()]},
+        edge2Points{edge2Loop[edge2Idx],
+                    edge2Loop[(edge2Idx + 1) % edge2Loop.size()],
+                    edge2Loop[(edge2Idx + 2) % edge2Loop.size()]};
 
     // FIXME: why still need this????
     // Skip self
-    if (e1Loopi == e2Loopi && e2i == e1i) continue;
+    if (edge1LoopIdx == edge2LoopIdx && edge2Idx == edge1Idx) continue;
 
 #ifdef MANIFOLD_DEBUG
     if (ManifoldParams().verbose) {
       std::cout << std::endl
-                << "Now " << e1Points[0] << " -> " << e1Points[1] << std::endl;
+                << "Now " << edge1Points[0] << " -> " << edge1Points[1]
+                << std::endl;
 
       std::cout << "-----------" << std::endl
-                << e2Points[0] << " -> " << e2Points[1] << std::endl;
+                << edge2Points[0] << " -> " << edge2Points[1] << std::endl;
 
-      std::cout << "std::array<size_t, 4> vBreakPoint{" << e1Loopi << ", "
-                << e1i << ", " << e2Loopi << ", " << e2i << "}; " << std::endl;
+      std::cout << "std::array<size_t, 4> vBreakPoint{" << edge1LoopIdx
+                << ", " << edge1Idx << ", " << edge2LoopIdx << ", "
+                << edge2Idx << "}; " << std::endl;
     }
 
     std::array<size_t, 4> vBreakPoint{0, 1, 1, 1};
 
-    if (e1Loopi == vBreakPoint[0] && e1i == vBreakPoint[1] &&
-        e2Loopi == vBreakPoint[2] && e2i == vBreakPoint[3]) {
+    if (edge1LoopIdx == vBreakPoint[0] && edge1Idx == vBreakPoint[1] &&
+        edge2LoopIdx == vBreakPoint[2] && edge2Idx == vBreakPoint[3]) {
       int i = 0;
     }
 
@@ -618,33 +626,35 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     std::vector<GeomTangentPair> filletCircles;
 
     // Calculate fillet intersection center
-    filletCircles = Intersect(e1Points, e2Points, radius, invert);
+    filletCircles = Intersect(edge1Points, edge2Points, radius, invert);
 
     for (auto it = filletCircles.begin(); it != filletCircles.end(); it++) {
       // If we swapped the edges for canonical ordering, swap the results back
       auto paramValues = it->ParameterValues;
-      size_t outE1i = e1i, outE1Loopi = e1Loopi, outE2i = e2i,
-             outE2Loopi = e2Loopi;
+      size_t outEdge1Idx = edge1Idx, outEdge1LoopIdx = edge1LoopIdx,
+             outEdge2Idx = edge2Idx, outEdge2LoopIdx = edge2LoopIdx;
       if (swapped) {
         std::swap(paramValues[0], paramValues[1]);
-        std::swap(outE1i, outE2i);
-        std::swap(outE1Loopi, outE2Loopi);
+        std::swap(outEdge1Idx, outEdge2Idx);
+        std::swap(outEdge1LoopIdx, outEdge2LoopIdx);
       }
 
       vec2 p1 = getPointOnEdgeByParameter(
-               loops[outE1Loopi][outE1i],
-               loops[outE1Loopi][(outE1i + 1) % loops[outE1Loopi].size()],
+               loops[outEdge1LoopIdx][outEdge1Idx],
+               loops[outEdge1LoopIdx]
+                    [(outEdge1Idx + 1) % loops[outEdge1LoopIdx].size()],
                paramValues[0]),
            p2 = getPointOnEdgeByParameter(
-               loops[outE2Loopi][outE2i],
-               loops[outE2Loopi][(outE2i + 1) % loops[outE2Loopi].size()],
+               loops[outEdge2LoopIdx][outEdge2Idx],
+               loops[outEdge2LoopIdx]
+                    [(outEdge2Idx + 1) % loops[outEdge2LoopIdx].size()],
                paramValues[1]);
 
       it->RadValues = getRadPair(p1, p2, it->CircleCenter);
 
       topoConnetionVec.emplace_back(TopoConnectionPair(
-          GeomTangentPair{paramValues, it->CircleCenter, it->RadValues}, outE1i,
-          outE1Loopi, outE2i, outE2Loopi));
+          GeomTangentPair{paramValues, it->CircleCenter, it->RadValues},
+          outEdge1Idx, outEdge1LoopIdx, outEdge2Idx, outEdge2LoopIdx));
     }
   }
 
@@ -838,15 +848,20 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     // Ensure arc goes from e1's tangent point to e2's tangent point
     // in the polygon's winding direction.
     {
-      const size_t e1Loopi = pair.LoopIndex[0], e1i = pair.EdgeIndex[0],
-                   e2Loopi = pair.LoopIndex[1], e2i = pair.EdgeIndex[1];
-      const auto &e1Loop = loops[e1Loopi], &e2Loop = loops[e2Loopi];
+      const size_t edge1LoopIdx = pair.LoopIndex[0],
+                   edge1Idx = pair.EdgeIndex[0],
+                   edge2LoopIdx = pair.LoopIndex[1],
+                   edge2Idx = pair.EdgeIndex[1];
+      const auto &edge1Loop = loops[edge1LoopIdx],
+                 &edge2Loop = loops[edge2LoopIdx];
 
-      vec2 p1 = getPointOnEdgeByParameter(e1Loop[e1i],
-                                          e1Loop[(e1i + 1) % e1Loop.size()],
+      vec2 p1 = getPointOnEdgeByParameter(edge1Loop[edge1Idx],
+                                          edge1Loop[(edge1Idx + 1) %
+                                                    edge1Loop.size()],
                                           pair.ParameterValues[0]),
-           p2 = getPointOnEdgeByParameter(e2Loop[e2i],
-                                          e2Loop[(e2i + 1) % e2Loop.size()],
+           p2 = getPointOnEdgeByParameter(edge2Loop[edge2Idx],
+                                          edge2Loop[(edge2Idx + 1) %
+                                                    edge2Loop.size()],
                                           pair.ParameterValues[1]);
 
       vec2 n1 = p1 - pair.CircleCenter, n2 = p2 - pair.CircleCenter;
