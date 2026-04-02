@@ -74,6 +74,8 @@ struct ColliderContext {
   std::vector<Edge> EdgeOld2NewVec;
 };
 
+enum class FilletSubCase : uint8_t { EE, VE, EV, VV };
+
 // Two edge tangent by same circle
 struct GeomTangentPair {
   std::array<double, 2> ParameterValues;
@@ -81,6 +83,8 @@ struct GeomTangentPair {
 
   // CCW or CW is determined by loop's direction
   std::array<double, 2> RadValues;
+
+  FilletSubCase SubCase;
 };
 
 struct TopoConnectionPair {
@@ -351,12 +355,14 @@ IntersectResult intersectArcArc(vec2 c1, vec2 arc1Start, vec2 arc1End,
 // Calculate the fillet circle center
 // The distance from edge or vertex to circle center is offset radius.
 // So this can be calculated by intersect of Edge and Arc.
+//
+// Step 3.1: Accepts pre-computed convexity instead of recomputing.
+// Step 3.2: Sub-cases are mutually exclusive by strict parameter bounds.
+// Step 2.2: RadValues computed internally — single source of truth.
 std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
                                        const std::array<vec2, 3>& e2Points,
-                                       const double radius, const bool invert) {
-  bool e1Convex = isConvex(e1Points) ^ invert,
-       e2Convex = isConvex(e2Points) ^ invert;
-
+                                       const double radius, const bool invert,
+                                       bool e1Convex, bool e2Convex) {
   vec2 e1Normal = getEdgeNormal(e1Points[1] - e1Points[0], invert),
        e1NextNormal = getEdgeNormal(e1Points[2] - e1Points[1], invert),
        e2Normal = getEdgeNormal(e2Points[1] - e2Points[0], invert),
@@ -369,6 +375,15 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
 
   std::vector<GeomTangentPair> result;
 
+  // Helper: compute RadValues for a result (Step 2.2)
+  auto computeRadValues = [&](double e1T, double e2T,
+                              const vec2& center) -> std::array<double, 2> {
+    vec2 p1 = getPointOnEdgeByParameter(e1Points[0], e1Points[1], e1T);
+    vec2 p2 = getPointOnEdgeByParameter(e2Points[0], e2Points[1], e2T);
+    return getRadPair(p1, p2, center);
+  };
+
+  // EE: both parameters strictly interior (Step 3.2)
   IntersectResult EE =
       intersectSegments(offsetE1[0], offsetE1[1], offsetE2[0], offsetE2[1]);
 
@@ -377,11 +392,14 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
     isPointProjectionOnSegment(EE.Points[0], e1Points[0], e1Points[1], e1T);
     isPointProjectionOnSegment(EE.Points[0], e2Points[0], e2Points[1], e2T);
 
-    if (e1T > EPSILON && e2T > EPSILON) {
-      result.emplace_back(GeomTangentPair{{e1T, e2T}, EE.Points[0], {}});
+    if (e1T > 0 && e1T < 1 && e2T > 0 && e2T < 1) {
+      auto radVals = computeRadValues(e1T, e2T, EE.Points[0]);
+      result.emplace_back(
+          GeomTangentPair{{e1T, e2T}, EE.Points[0], radVals, FilletSubCase::EE});
     }
   }
 
+  // VE: e1 vertex × e2 strictly interior (Step 3.2)
   if (!e1Convex) {
     IntersectResult VE =
         intersectSegmentArc(offsetE2[0], offsetE2[1], e1Points[1], radius,
@@ -391,12 +409,15 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
       double e2T = 0;
       isPointProjectionOnSegment(VE.Points[i], e2Points[0], e2Points[1], e2T);
 
-      if (e2T > EPSILON) {
-        result.emplace_back(GeomTangentPair{{1, e2T}, VE.Points[i], {}});
+      if (e2T > 0 && e2T < 1) {
+        auto radVals = computeRadValues(1.0, e2T, VE.Points[i]);
+        result.emplace_back(
+            GeomTangentPair{{1, e2T}, VE.Points[i], radVals, FilletSubCase::VE});
       }
     }
   }
 
+  // EV: e1 strictly interior × e2 vertex (Step 3.2)
   if (!e2Convex) {
     IntersectResult EV =
         intersectSegmentArc(offsetE1[0], offsetE1[1], e2Points[1], radius,
@@ -406,19 +427,24 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
       double e1T = 0;
       isPointProjectionOnSegment(EV.Points[i], e1Points[0], e1Points[1], e1T);
 
-      if (e1T > EPSILON) {
-        result.emplace_back(GeomTangentPair{{e1T, 1}, EV.Points[i], {}});
+      if (e1T > 0 && e1T < 1) {
+        auto radVals = computeRadValues(e1T, 1.0, EV.Points[i]);
+        result.emplace_back(
+            GeomTangentPair{{e1T, 1}, EV.Points[i], radVals, FilletSubCase::EV});
       }
     }
   }
 
+  // VV: both vertices (Step 3.2)
   if (!e1Convex && !e2Convex) {
     IntersectResult VV =
         intersectArcArc(e1Points[1], e1Normal, e1NextNormal, invert,
                         e2Points[1], e2Normal, e2NextNormal, invert, radius);
 
     for (int i = 0; i != VV.Count; i++) {
-      result.emplace_back(GeomTangentPair{{1, 1}, VV.Points[i], {}});
+      auto radVals = computeRadValues(1.0, 1.0, VV.Points[i]);
+      result.emplace_back(
+          GeomTangentPair{{1, 1}, VV.Points[i], radVals, FilletSubCase::VV});
     }
   }
 
@@ -625,35 +651,31 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
     std::vector<GeomTangentPair> filletCircles;
 
+    // Step 3.1: Pre-compute convexity from stored geometry
+    bool e1Convex = isConvex(edge1Points) ^ invert;
+    bool e2Convex = isConvex(edge2Points) ^ invert;
+
     // Calculate fillet intersection center
-    filletCircles = Intersect(edge1Points, edge2Points, radius, invert);
+    // Step 2.2: RadValues now computed inside Intersect()
+    filletCircles =
+        Intersect(edge1Points, edge2Points, radius, invert, e1Convex, e2Convex);
 
     for (auto it = filletCircles.begin(); it != filletCircles.end(); it++) {
       // If we swapped the edges for canonical ordering, swap the results back
       auto paramValues = it->ParameterValues;
+      auto radValues = it->RadValues;
       size_t outEdge1Idx = edge1Idx, outEdge1LoopIdx = edge1LoopIdx,
              outEdge2Idx = edge2Idx, outEdge2LoopIdx = edge2LoopIdx;
       if (swapped) {
         std::swap(paramValues[0], paramValues[1]);
+        std::swap(radValues[0], radValues[1]);
         std::swap(outEdge1Idx, outEdge2Idx);
         std::swap(outEdge1LoopIdx, outEdge2LoopIdx);
       }
 
-      vec2 p1 = getPointOnEdgeByParameter(
-               loops[outEdge1LoopIdx][outEdge1Idx],
-               loops[outEdge1LoopIdx]
-                    [(outEdge1Idx + 1) % loops[outEdge1LoopIdx].size()],
-               paramValues[0]),
-           p2 = getPointOnEdgeByParameter(
-               loops[outEdge2LoopIdx][outEdge2Idx],
-               loops[outEdge2LoopIdx]
-                    [(outEdge2Idx + 1) % loops[outEdge2LoopIdx].size()],
-               paramValues[1]);
-
-      it->RadValues = getRadPair(p1, p2, it->CircleCenter);
-
       topoConnetionVec.emplace_back(TopoConnectionPair(
-          GeomTangentPair{paramValues, it->CircleCenter, it->RadValues},
+          GeomTangentPair{paramValues, it->CircleCenter, radValues,
+                          it->SubCase},
           outEdge1Idx, outEdge1LoopIdx, outEdge2Idx, outEdge2LoopIdx));
     }
   }
@@ -948,7 +970,7 @@ std::vector<CrossSection> Tracing(
 
       const vec2 dis = *tracingLoop.rbegin() - *pts.begin();
 
-      if (la::dot(dis, dis) <= EPSILON) pts.erase(pts.begin());
+      if (la::dot(dis, dis) == 0) pts.erase(pts.begin());
 
       tracingLoop.insert(tracingLoop.end(), pts.begin(), pts.end());
 
@@ -966,7 +988,7 @@ std::vector<CrossSection> Tracing(
     CrossSection cs = loop;
     double area = cs.Area();
 
-    if (loopFlag[i] == 0 && area > EPSILON) {
+    if (loopFlag[i] == 0 && area > 0) {
       hole = hole.Boolean(cs, manifold::OpType::Add);
     }
   }
@@ -1044,7 +1066,7 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
   if (polygons.empty()) return {};
 
   bool invert = false;
-  if (radius < EPSILON) {
+  if (radius < 0) {
     invert = true;
     radius = std::abs(radius);
   }
