@@ -661,117 +661,28 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
   if (topoConnetionVec.empty())
     return std::vector<std::vector<TopoConnectionPair>>();
 
-  // NOTE: Cluster fillet circle to unify decision
+  // NOTE: Filter invalid fillet circles independently.
   std::vector<uint8_t> mark(topoConnetionVec.size(), 0);
   {
-    std::vector<size_t> cluster(topoConnetionVec.size());
-    const size_t NONCLUSTERIDX = topoConnetionVec.size();
     Vec<Box> circleBoxVec(topoConnetionVec.size());
 
-    // Avoid collider error
-    if (topoConnetionVec.size() == 1) {
-      cluster[0] = 1;
-
-      vec2 center = topoConnetionVec[0].CircleCenter;
+    for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
+         it++) {
+      vec2 center = it->CircleCenter;
       Box box(toVec3(center - vec2(1, 0) * radius),
               toVec3(center + vec2(1, 0) * radius));
 
       box.Union(toVec3(center - vec2(0, 1) * radius));
       box.Union(toVec3(center + vec2(0, 1) * radius));
 
-      circleBoxVec[0] = box;
-    } else {
-      // Find potential cluster circle
-      std::vector<std::vector<size_t>> clusterVec(topoConnetionVec.size());
-      {
-        struct TopoOld2New {
-          size_t Index;
-          manifold::Box Box;
-          uint32_t Morton;
-        };
-
-        std::vector<TopoOld2New> topoOld2New(topoConnetionVec.size());
-
-        for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
-             it++) {
-          Box box(toVec3(it->CircleCenter - vec2(1, 0) * radius),
-                  toVec3(it->CircleCenter + vec2(1, 0) * radius));
-
-          box.Union(toVec3(it->CircleCenter - vec2(0, 1) * radius));
-          box.Union(toVec3(it->CircleCenter + vec2(0, 1) * radius));
-
-          size_t index = std::distance(topoConnetionVec.begin(), it);
-          topoOld2New[index] =
-              TopoOld2New{index, box, Collider::MortonCode(box.Center(), box)};
-
-          circleBoxVec[index] = box;
-        }
-
-        std::stable_sort(
-            topoOld2New.begin(), topoOld2New.end(),
-            [](const TopoOld2New& lhs, const TopoOld2New& rhs) -> bool {
-              return rhs.Morton > lhs.Morton;
-            });
-
-        Vec<Box> boxVec;
-        Vec<uint32_t> mortonVec;
-        mortonVec.resize(topoConnetionVec.size());
-        boxVec.resize(topoConnetionVec.size());
-
-        manifold::transform(topoOld2New.begin(), topoOld2New.end(),
-                            boxVec.begin(),
-                            [](const TopoOld2New& topo) { return topo.Box; });
-
-        manifold::transform(
-            topoOld2New.begin(), topoOld2New.end(), mortonVec.begin(),
-            [](const TopoOld2New& topo) { return topo.Morton; });
-
-        Collider circleCollider(boxVec, mortonVec);
-        auto recordCollision = [&](int i, int j) {
-          if (i == j) return;
-
-          size_t ii = topoOld2New[i].Index, jj = topoOld2New[j].Index;
-
-          vec2 dis = topoConnetionVec[ii].CircleCenter -
-                     topoConnetionVec[jj].CircleCenter;
-
-          if (la::dot(dis, dis) <= EPSILON * EPSILON)
-            clusterVec[ii].push_back(jj);
-        };
-
-        auto recorder = MakeSimpleRecorder(recordCollision);
-
-        circleCollider.Collisions(boxVec.cview(), recorder);
-      }
-
-      // Build cluster
-      // FIXME: to ask is collider invertable? A->B but B not A?
-
-      {
-        for (auto it = clusterVec.begin(); it != clusterVec.end(); it++) {
-          size_t index = std::distance(clusterVec.begin(), it);
-
-          if (it->empty()) {
-            // Set topoConnetionVec.size() as non cluster
-            cluster[index] = topoConnetionVec.size();
-            continue;
-          }
-
-          for (auto itt = it->begin(); itt != it->end(); itt++) {
-            cluster[index] = std::min(index, *itt);
-          }
-        }
-      }
+      size_t index = std::distance(topoConnetionVec.begin(), it);
+      circleBoxVec[index] = box;
     }
 
-    // If circle is invalid, mark is set to 1
+    // If circle is invalid, mark is set to 1.
     {
       auto markInvalidCircle = [&](int i, int j) {
         if (mark[i]) return;
-        if (cluster[i] != NONCLUSTERIDX && mark[cluster[i]]) {
-          mark[i] = 1;
-          return;
-        }
 
         const TopoConnectionPair& pair = topoConnetionVec[i];
 
@@ -793,8 +704,6 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
         if (distance < radius) {
           mark[i] = 1;
-
-          if (cluster[i] != NONCLUSTERIDX) mark[cluster[i]] = 1;
         }
       };
 
@@ -805,26 +714,15 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
 #ifdef MANIFOLD_DEBUG
     if (ManifoldParams().verbose) {
-      // for (size_t j = 0; j != clusterVec.size(); j++) {
-      //   if (clusterVec[j].empty()) continue;
-
-      //   std::cout << "Cluster " << j << ": ";
-      //   for (size_t i = 0; i != clusterVec[j].size(); i++) {
-      //     std::cout << clusterVec[j][i] << " ";
-      //   }
-
-      //   std::cout << std::endl;
-      // }
-
       for (size_t i = 0; i != topoConnetionVec.size(); i++) {
         if (mark[i]) {
           std::cout << "Removed " << topoConnetionVec[i].CircleCenter
-                    << " cluster " << cluster[i] << std::endl;
+                    << std::endl;
 
           removedCircleCenter.push_back(topoConnetionVec[i].CircleCenter);
         } else {
           std::cout << "Added " << topoConnetionVec[i].CircleCenter
-                    << " cluster " << cluster[i] << std::endl;
+                    << std::endl;
 
           resultCircleCenter.push_back(topoConnetionVec[i].CircleCenter);
         }
@@ -839,7 +737,7 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       edgeCount, std::vector<TopoConnectionPair>());
 
   for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end(); it++) {
-    // Cluster removed
+    // Invalid candidate removed
     if (mark[size_t(std::distance(topoConnetionVec.begin(), it))]) continue;
 
     auto pair = *it;
