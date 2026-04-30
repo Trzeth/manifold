@@ -436,7 +436,7 @@ def plot_circle_centers(ax, centers: List[List[float]], color: str, label: str, 
 if __name__ == "__main__":
     input_file = "Testing/Fillet/input.txt" # Hardcoded as per request
     min_file_index = 0
-    max_file_index = 10      # Hardcoded scan from 0 to 10
+    max_file_index = 41      # Hardcoded scan from 0 to 10
 
     # --- Read Input Data ONCE ---
     print(f"Reading base input file: {input_file}")
@@ -538,7 +538,7 @@ if __name__ == "__main__":
         plot_circle_centers(ax, fillet_circles, color='green', label='Fillet center', marker='o')
 
         # --- Subplot Finalization ---
-        ax.set_title(f"{os.path.basename(result_file)} (r={radius:.3f})")
+        ax.set_title(f"{os.path.basename(result_file)} (r={radius:.17g})")
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
 
@@ -614,7 +614,7 @@ if __name__ == "__main__":
             plot_circle_centers(ax, fillet_circles, color='green', label='Fillet center', marker='o')
 
             # --- Subplot Finalization ---
-            ax.set_title(f"{os.path.basename(result_file)} (r={radius:.3f})")
+            ax.set_title(f"{os.path.basename(result_file)} (r={radius:.17g})")
             ax.set_xlabel("X Coordinate")
             ax.set_ylabel("Y Coordinate")
 
