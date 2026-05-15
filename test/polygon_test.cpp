@@ -86,6 +86,16 @@ bool TestFillet(const Polygons& polys, CrossSection input, double radius,
   std::cout << "[==========] Testing radius: " << radius << std::endl;
 #endif
 
+  const double inArea = manifold::CrossSection(polys).Area();
+  const double outArea = rc.Area();
+
+  std::cout << std::setprecision(17) << "radius = " << radius << "\n"
+            << "inArea = " << inArea << "\n"
+            << "outArea = " << outArea << "\n"
+            << "delta = " << (outArea - inArea) << "\n"
+            << "relative delta = "
+            << (outArea - inArea) / std::max(1.0, std::abs(inArea)) << "\n";
+
   EXPECT_TRUE((manifold::CrossSection(polys).Area() == 0) ||
               (rc.Area() < manifold::CrossSection(polys).Area()));
 
@@ -141,11 +151,10 @@ void BuildFillet(const Polygons& polys, double epsilon = -1.0) {
   const CrossSection input = CrossSection(polys);
 
 #ifdef MANIFOLD_DEBUG
+  manifold::ManifoldParams().verbose = true;
   int idx = 2;
 
   if (idx == 0) {
-    manifold::ManifoldParams().verbose = true;
-
     double radius = 0.10000000000000001;
     TestFillet(polys, input, radius, inputCircularSegments);
   } else if (idx == 1) {

@@ -394,8 +394,8 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
 
     if (e1T > 0 && e1T < 1 && e2T > 0 && e2T < 1) {
       auto radVals = computeRadValues(e1T, e2T, EE.Points[0]);
-      result.emplace_back(
-          GeomTangentPair{{e1T, e2T}, EE.Points[0], radVals, FilletSubCase::EE});
+      result.emplace_back(GeomTangentPair{
+          {e1T, e2T}, EE.Points[0], radVals, FilletSubCase::EE});
     }
   }
 
@@ -411,8 +411,8 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
 
       if (e2T > 0 && e2T < 1) {
         auto radVals = computeRadValues(1.0, e2T, VE.Points[i]);
-        result.emplace_back(
-            GeomTangentPair{{1, e2T}, VE.Points[i], radVals, FilletSubCase::VE});
+        result.emplace_back(GeomTangentPair{
+            {1, e2T}, VE.Points[i], radVals, FilletSubCase::VE});
       }
     }
   }
@@ -429,8 +429,8 @@ std::vector<GeomTangentPair> Intersect(const std::array<vec2, 3>& e1Points,
 
       if (e1T > 0 && e1T < 1) {
         auto radVals = computeRadValues(e1T, 1.0, EV.Points[i]);
-        result.emplace_back(
-            GeomTangentPair{{e1T, 1}, EV.Points[i], radVals, FilletSubCase::EV});
+        result.emplace_back(GeomTangentPair{
+            {e1T, 1}, EV.Points[i], radVals, FilletSubCase::EV});
       }
     }
   }
@@ -605,11 +605,9 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     const size_t globalId2 = loopOffsetVec[edge2InputLoopIdx] + edge2InputIdx;
     const bool swapped = globalId1 > globalId2;
 
-    const size_t edge1LoopIdx =
-                     swapped ? edge2InputLoopIdx : edge1InputLoopIdx,
+    const size_t edge1LoopIdx = swapped ? edge2InputLoopIdx : edge1InputLoopIdx,
                  edge1Idx = swapped ? edge2InputIdx : edge1InputIdx,
-                 edge2LoopIdx =
-                     swapped ? edge1InputLoopIdx : edge2InputLoopIdx,
+                 edge2LoopIdx = swapped ? edge1InputLoopIdx : edge2InputLoopIdx,
                  edge2Idx = swapped ? edge1InputIdx : edge2InputIdx;
 
     const auto &edge1Loop = loops[edge1LoopIdx],
@@ -635,9 +633,9 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       std::cout << "-----------" << std::endl
                 << edge2Points[0] << " -> " << edge2Points[1] << std::endl;
 
-      std::cout << "std::array<size_t, 4> vBreakPoint{" << edge1LoopIdx
-                << ", " << edge1Idx << ", " << edge2LoopIdx << ", "
-                << edge2Idx << "}; " << std::endl;
+      std::cout << "std::array<size_t, 4> vBreakPoint{" << edge1LoopIdx << ", "
+                << edge1Idx << ", " << edge2LoopIdx << ", " << edge2Idx << "}; "
+                << std::endl;
     }
 
     std::array<size_t, 4> vBreakPoint{0, 1, 1, 1};
@@ -724,7 +722,21 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
         double distance =
             distancePointSegment(pair.CircleCenter, ePoints[0], ePoints[1]);
 
-        if (distance < radius) {
+        const double gap = distance - radius;
+        const double tol = std::max(1e-12, 1e-10 * std::max(1.0, radius));
+
+        if (gap <= tol) {
+#ifdef MANIFOLD_DEBUG
+          if (ManifoldParams().verbose) {
+            std::cout << "Removed by edge [" << eLoopi << ", " << ei << "] "
+                      << "arc [" << pair.LoopIndex[0] << ", "
+                      << pair.EdgeIndex[0] << "] -> [" << pair.LoopIndex[1]
+                      << ", " << pair.EdgeIndex[1] << "] "
+                      << "center=" << pair.CircleCenter
+                      << " distance=" << distance << " radius=" << radius
+                      << " gap=" << gap << " tol=" << tol << std::endl;
+          }
+#endif
           mark[i] = 1;
         }
       };
@@ -775,14 +787,14 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
       const auto &edge1Loop = loops[edge1LoopIdx],
                  &edge2Loop = loops[edge2LoopIdx];
 
-      vec2 p1 = getPointOnEdgeByParameter(edge1Loop[edge1Idx],
-                                          edge1Loop[(edge1Idx + 1) %
-                                                    edge1Loop.size()],
-                                          pair.ParameterValues[0]),
-           p2 = getPointOnEdgeByParameter(edge2Loop[edge2Idx],
-                                          edge2Loop[(edge2Idx + 1) %
-                                                    edge2Loop.size()],
-                                          pair.ParameterValues[1]);
+      vec2 p1 = getPointOnEdgeByParameter(
+               edge1Loop[edge1Idx],
+               edge1Loop[(edge1Idx + 1) % edge1Loop.size()],
+               pair.ParameterValues[0]),
+           p2 = getPointOnEdgeByParameter(
+               edge2Loop[edge2Idx],
+               edge2Loop[(edge2Idx + 1) % edge2Loop.size()],
+               pair.ParameterValues[1]);
 
       vec2 n1 = p1 - pair.CircleCenter, n2 = p2 - pair.CircleCenter;
       bool needsSwap =
@@ -869,124 +881,429 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
 
   return arcConnection;
 }
-
 std::vector<CrossSection> Tracing(
     const Polygons& loops, const std::vector<size_t>& loopOffsetVec,
     std::vector<std::vector<TopoConnectionPair>> arcConnection,
     int circularSegments, double radius) {
   struct EdgeLoopPair {
-    size_t EdgeIndex, LoopIndex;
-    double ParameterValue;
-    vec2 CircleCenter;
-
-    bool operator==(const EdgeLoopPair& o) {
-      return (EdgeIndex == o.EdgeIndex) && (LoopIndex == o.LoopIndex) &&
-             (ParameterValue == o.ParameterValue);
-    }
-
-    bool operator!=(const EdgeLoopPair& o) { return !(*this == o); }
+    size_t EdgeIndex = 0;
+    size_t LoopIndex = 0;
+    double ParameterValue = 0.0;
+    vec2 CircleCenter{};
   };
 
-  auto getEdgePosition = [&loopOffsetVec](const EdgeLoopPair& edge) -> size_t {
-    return loopOffsetVec[edge.LoopIndex] + edge.EdgeIndex;
+  auto fail = [](const std::string& msg) -> void {
+    throw std::runtime_error("Tracing(): " + msg);
+  };
+
+  auto failState = [](const std::string& msg,
+                      const EdgeLoopPair& current) -> void {
+    std::ostringstream oss;
+    oss << "Tracing(): " << msg << " current=[" << current.LoopIndex << ", "
+        << current.EdgeIndex << "], t=" << current.ParameterValue
+        << ", center={" << current.CircleCenter.x << ", "
+        << current.CircleCenter.y << "}";
+    throw std::runtime_error(oss.str());
+  };
+
+  auto near = [](double a, double b) -> bool {
+    return std::abs(a - b) <= EPSILON;
+  };
+
+  auto validFinite = [](double v) -> bool { return std::isfinite(v); };
+
+  auto validVec = [&](const vec2& v) -> bool {
+    return validFinite(v.x) && validFinite(v.y);
+  };
+
+  auto validParam = [&](double t) -> bool {
+    return validFinite(t) && t >= -EPSILON && t <= 1.0 + EPSILON;
+  };
+
+  auto samePoint = [&](const vec2& a, const vec2& b) -> bool {
+    return length2(a - b) <= EPSILON * EPSILON;
+  };
+
+  size_t inputArcCount = 0;
+  for (const auto& bucket : arcConnection) {
+    inputArcCount += bucket.size();
+  }
+
+  if (loops.empty()) {
+    if (!loopOffsetVec.empty() || inputArcCount != 0) {
+      fail(
+          "empty loops but non-empty loopOffsetVec or non-empty arcConnection");
+    }
+    return {};
+  }
+
+  if (!std::isfinite(radius) || radius <= 0.0) {
+    fail("radius must be finite and positive");
+  }
+
+  if (circularSegments < 3) {
+    fail("circularSegments must be >= 3");
+  }
+
+  if (loopOffsetVec.size() != loops.size()) {
+    fail("loopOffsetVec size must equal loops size");
+  }
+
+  // Count local edges and validate loop vertices.
+  // Do NOT require loopOffsetVec to be a contiguous prefix sum here.
+  // For clipped/sparse subparts, loopOffsetVec may contain global offsets
+  // with gaps.
+  size_t localEdgeCount = 0;
+  std::set<size_t> globalEdgePositions;
+
+  for (size_t li = 0; li < loops.size(); ++li) {
+    if (loops[li].size() < 3) {
+      std::ostringstream oss;
+      oss << "loop " << li << " has fewer than 3 vertices";
+      fail(oss.str());
+    }
+
+    for (size_t vi = 0; vi < loops[li].size(); ++vi) {
+      if (!validVec(loops[li][vi])) {
+        std::ostringstream oss;
+        oss << "loop " << li << " vertex " << vi
+            << " contains non-finite coordinate";
+        fail(oss.str());
+      }
+    }
+
+    for (size_t ei = 0; ei < loops[li].size(); ++ei) {
+      const size_t globalEdgePos = loopOffsetVec[li] + ei;
+      if (!globalEdgePositions.insert(globalEdgePos).second) {
+        std::ostringstream oss;
+        oss << "duplicate global edge position " << globalEdgePos
+            << " from loop " << li << ", edge " << ei;
+        fail(oss.str());
+      }
+    }
+
+    localEdgeCount += loops[li].size();
+  }
+
+  auto edgePositionOf = [&](size_t loopIdx, size_t edgeIdx) -> size_t {
+    if (loopIdx >= loops.size()) {
+      std::ostringstream oss;
+      oss << "invalid loop index " << loopIdx;
+      fail(oss.str());
+    }
+
+    if (edgeIdx >= loops[loopIdx].size()) {
+      std::ostringstream oss;
+      oss << "invalid edge index " << edgeIdx << " for loop " << loopIdx
+          << ", loop size = " << loops[loopIdx].size();
+      fail(oss.str());
+    }
+
+    return loopOffsetVec[loopIdx] + edgeIdx;
+  };
+
+  auto getEdgePosition = [&](const EdgeLoopPair& edge) -> size_t {
+    return edgePositionOf(edge.LoopIndex, edge.EdgeIndex);
+  };
+
+  auto sameArc = [&](const TopoConnectionPair& a,
+                     const TopoConnectionPair& b) -> bool {
+    return a.LoopIndex == b.LoopIndex && a.EdgeIndex == b.EdgeIndex &&
+           near(a.ParameterValues[0], b.ParameterValues[0]) &&
+           near(a.ParameterValues[1], b.ParameterValues[1]) &&
+           samePoint(a.CircleCenter, b.CircleCenter);
+  };
+
+  auto validateArcGeometryOnly = [&](const TopoConnectionPair& arc) -> void {
+    for (int k = 0; k < 2; ++k) {
+      if (arc.LoopIndex[k] >= loops.size()) {
+        std::ostringstream oss;
+        oss << "arc has invalid LoopIndex[" << k << "] = " << arc.LoopIndex[k];
+        fail(oss.str());
+      }
+
+      if (arc.EdgeIndex[k] >= loops[arc.LoopIndex[k]].size()) {
+        std::ostringstream oss;
+        oss << "arc has invalid EdgeIndex[" << k << "] = " << arc.EdgeIndex[k]
+            << " for loop " << arc.LoopIndex[k];
+        fail(oss.str());
+      }
+
+      if (!validParam(arc.ParameterValues[k])) {
+        std::ostringstream oss;
+        oss << "arc has invalid ParameterValues[" << k
+            << "] = " << arc.ParameterValues[k];
+        fail(oss.str());
+      }
+
+      if (!validFinite(arc.RadValues[k])) {
+        std::ostringstream oss;
+        oss << "arc has invalid RadValues[" << k << "] = " << arc.RadValues[k];
+        fail(oss.str());
+      }
+    }
+
+    if (!validVec(arc.CircleCenter)) {
+      fail("arc has non-finite CircleCenter");
+    }
+  };
+
+  // Sparse/global lookup table.
+  // Important: ignore the original bucket index. In clipped cases,
+  // arcConnection[i] may not correspond to global edge i.
+  std::unordered_map<size_t, std::vector<TopoConnectionPair>> arcsByEdge;
+  size_t totalArcCount = 0;
+
+  for (const auto& bucket : arcConnection) {
+    for (const auto& arc : bucket) {
+      validateArcGeometryOnly(arc);
+
+      const size_t startEdgePos =
+          edgePositionOf(arc.LoopIndex[0], arc.EdgeIndex[0]);
+
+      arcsByEdge[startEdgePos].push_back(arc);
+      ++totalArcCount;
+    }
+  }
+
+  if (totalArcCount == 0) {
+    return {};
+  }
+
+  // Sort only by start parameter. Keep equal-parameter order stable so that
+  // endpoint ordering from CalculateFilletArc() is not destroyed.
+  for (auto& kv : arcsByEdge) {
+    auto& arcs = kv.second;
+
+    std::stable_sort(
+        arcs.begin(), arcs.end(),
+        [&](const TopoConnectionPair& a, const TopoConnectionPair& b) {
+          if (!near(a.ParameterValues[0], b.ParameterValues[0])) {
+            return a.ParameterValues[0] < b.ParameterValues[0];
+          }
+
+          return false;
+        });
+  }
+
+  auto appendArcPoints = [&](SimplePolygon& dst,
+                             const TopoConnectionPair& arc) -> void {
+    auto pts = discreteArcToPoint(arc, radius, circularSegments);
+
+    if (pts.empty()) {
+      fail("discreteArcToPoint returned empty point list");
+    }
+
+    for (const auto& p : pts) {
+      if (!validVec(p)) {
+        fail("discreteArcToPoint returned non-finite point");
+      }
+    }
+
+    size_t begin = 0;
+    if (!dst.empty() && samePoint(dst.back(), pts.front())) {
+      begin = 1;
+    }
+
+    dst.insert(dst.end(), pts.begin() + begin, pts.end());
+  };
+
+  auto isWrongEndpointCandidate = [&](const TopoConnectionPair& candidate,
+                                      const EdgeLoopPair& current) -> bool {
+    const bool bothStart = near(current.ParameterValue, 0.0) &&
+                           near(candidate.ParameterValues[0], 0.0);
+
+    const bool bothEnd = near(current.ParameterValue, 1.0) &&
+                         near(candidate.ParameterValues[0], 1.0);
+
+    if (!bothStart && !bothEnd) {
+      return false;
+    }
+
+    const auto& loop = loops[current.LoopIndex];
+
+    // t == 1 means the endpoint is the edge end vertex, not the edge start.
+    const vec2 vertex = bothEnd ? loop[(current.EdgeIndex + 1) % loop.size()]
+                                : loop[current.EdgeIndex];
+
+    const double sideDot =
+        la::dot(candidate.CircleCenter - vertex, current.CircleCenter - vertex);
+
+    // Preserve old intent: if the candidate and previous circle are on the
+    // same side of the vertex, skip this candidate.
+    return sideDot > EPSILON;
+  };
+
+  auto findNextArc = [&](std::vector<TopoConnectionPair>& currentEdge,
+                         const EdgeLoopPair& current) {
+    for (auto it = currentEdge.begin(); it != currentEdge.end(); ++it) {
+      if (it->ParameterValues[0] + EPSILON < current.ParameterValue) {
+        continue;
+      }
+
+      if (isWrongEndpointCandidate(*it, current)) {
+        continue;
+      }
+
+      return it;
+    }
+
+    return currentEdge.end();
+  };
+
+  auto findFirstNonEmptyEdge = [&]() -> std::optional<size_t> {
+    std::optional<size_t> best;
+
+    for (const auto& kv : arcsByEdge) {
+      const size_t edgePos = kv.first;
+      const auto& arcs = kv.second;
+
+      if (arcs.empty()) {
+        continue;
+      }
+
+      if (!best || edgePos < *best) {
+        best = edgePos;
+      }
+    }
+
+    return best;
   };
 
   std::vector<uint8_t> loopFlag(loops.size(), 0);
-
   Polygons resultLoops;
 
+  const size_t maxGlobalSteps =
+      totalArcCount * (localEdgeCount + 1) + localEdgeCount + 16;
+
   while (true) {
-    // NOTE: Find first fillet arc to start tracing
-    // To avoid start from a edge that can't fit the circle.
-    const auto firstNonEmpty =
-        std::find_if(arcConnection.begin(), arcConnection.end(),
-                     [](const auto& c) { return !c.empty(); });
+    const std::optional<size_t> startEdgePosOpt = findFirstNonEmptyEdge();
 
-    if (firstNonEmpty == arcConnection.end()) break;
+    if (!startEdgePosOpt) {
+      break;
+    }
 
-    const auto startIt = firstNonEmpty->begin();
+    const size_t startEdgePos = *startEdgePosOpt;
+    auto startBucketIt = arcsByEdge.find(startEdgePos);
 
-    SimplePolygon tracingLoop{};
-    const auto startPts =
-        discreteArcToPoint(*startIt, radius, circularSegments);
-    tracingLoop.insert(tracingLoop.end(), startPts.begin(), startPts.end());
+    if (startBucketIt == arcsByEdge.end() || startBucketIt->second.empty()) {
+      fail("internal error: selected empty start edge");
+    }
 
-    loopFlag[startIt->LoopIndex[0]] = 1;
-    loopFlag[startIt->LoopIndex[1]] = 1;
+    const TopoConnectionPair startArc = startBucketIt->second.front();
 
-    EdgeLoopPair current{startIt->EdgeIndex[1], startIt->LoopIndex[1],
-                         startIt->ParameterValues[1], startIt->CircleCenter};
+    SimplePolygon tracingLoop;
+    appendArcPoints(tracingLoop, startArc);
+
+    loopFlag[startArc.LoopIndex[0]] = 1;
+    loopFlag[startArc.LoopIndex[1]] = 1;
+
+    EdgeLoopPair current{startArc.EdgeIndex[1], startArc.LoopIndex[1],
+                         startArc.ParameterValues[1], startArc.CircleCenter};
+
+    bool closed = false;
+    size_t noArcWalkCount = 0;
+    size_t stepCount = 0;
 
     while (true) {
-      // Trace to find next arc on current edge
-      auto& currentEdge = arcConnection[getEdgePosition(current)];
-
-      auto it = std::find_if(currentEdge.begin(), currentEdge.end(),
-                             [current](const TopoConnectionPair& ele) -> bool {
-                               return ele.ParameterValues[0] >=
-                                      current.ParameterValue;
-                             });
-
-      // Pre arc and next arc start and end at same point, need to check
-      // orientation
-      if (it != currentEdge.end()) {
-        bool bothStart = (current.ParameterValue == 0.0 &&
-                          it->ParameterValues[0] == 0.0),
-             bothEnd = (current.ParameterValue == 1.0 &&
-                        it->ParameterValues[0] == 1.0);
-
-        if (bothStart || bothEnd) {
-          const vec2 p = loops[current.LoopIndex][current.EdgeIndex];
-          if (la::dot(it->CircleCenter - p, current.CircleCenter - p) > 0) {
-            it = std::find_if(it + 1, currentEdge.end(),
-                              [current](const TopoConnectionPair& ele) -> bool {
-                                return ele.ParameterValues[0] >=
-                                       current.ParameterValue;
-                              });
-          }
-        }
+      if (++stepCount > maxGlobalSteps) {
+        failState("step limit exceeded; possible non-terminating trace",
+                  current);
       }
 
-      // Not found, just go to next edge
-      if (it == currentEdge.end()) {
+      const size_t currentEdgePos = getEdgePosition(current);
+      auto edgeBucketIt = arcsByEdge.find(currentEdgePos);
+
+      // No fillet arc bucket on this edge: walk along the original polygon.
+      if (edgeBucketIt == arcsByEdge.end() || edgeBucketIt->second.empty()) {
         const auto& loop = loops[current.LoopIndex];
+
         tracingLoop.push_back(loop[(current.EdgeIndex + 1) % loop.size()]);
 
         current.EdgeIndex = (current.EdgeIndex + 1) % loop.size();
-        current.ParameterValue = 0;
+        current.ParameterValue = 0.0;
+
+        ++noArcWalkCount;
+
+        if (noArcWalkCount > loop.size()) {
+          failState(
+              "open/orphan trace: walked one complete loop without finding "
+              "the next arc",
+              current);
+        }
 
         continue;
       }
 
-      // Found next circle fillet
-      TopoConnectionPair arc = *it;
+      auto& currentEdge = edgeBucketIt->second;
+      auto it = findNextArc(currentEdge, current);
+
+      // Bucket exists, but no usable arc ahead on this edge.
+      if (it == currentEdge.end()) {
+        const auto& loop = loops[current.LoopIndex];
+
+        tracingLoop.push_back(loop[(current.EdgeIndex + 1) % loop.size()]);
+
+        current.EdgeIndex = (current.EdgeIndex + 1) % loop.size();
+        current.ParameterValue = 0.0;
+
+        ++noArcWalkCount;
+
+        if (noArcWalkCount > loop.size()) {
+          failState(
+              "open/orphan trace: walked one complete loop without finding "
+              "the next arc",
+              current);
+        }
+
+        continue;
+      }
+
+      noArcWalkCount = 0;
+
+      const TopoConnectionPair arc = *it;
+      const bool returnedToStart = sameArc(arc, startArc);
+
       currentEdge.erase(it);
 
-      if (it == startIt) {
+      if (returnedToStart) {
+        closed = true;
         break;
       }
 
-      auto pts = discreteArcToPoint(arc, radius, circularSegments);
+      appendArcPoints(tracingLoop, arc);
 
-      const vec2 dis = *tracingLoop.rbegin() - *pts.begin();
+      current = {arc.EdgeIndex[1], arc.LoopIndex[1], arc.ParameterValues[1],
+                 arc.CircleCenter};
 
-      if (la::dot(dis, dis) == 0) pts.erase(pts.begin());
-
-      tracingLoop.insert(tracingLoop.end(), pts.begin(), pts.end());
-
-      current = {arc.EdgeIndex[1], arc.LoopIndex[1], arc.ParameterValues[1]};
       loopFlag[arc.LoopIndex[1]] = 1;
     }
+
+    if (!closed) {
+      fail("internal error: trace exited without closure");
+    }
+
+    if (tracingLoop.size() < 3) {
+      fail("closed trace has fewer than 3 points");
+    }
+
     resultLoops.push_back(tracingLoop);
   }
 
   CrossSection hole;
 
-  for (size_t i = 0; i != loops.size(); i++) {
+  for (size_t i = 0; i < loops.size(); ++i) {
     SimplePolygon loop = loops[i];
     std::reverse(loop.begin(), loop.end());
+
     CrossSection cs = loop;
-    double area = cs.Area();
+    const double area = cs.Area();
+
+    if (!std::isfinite(area)) {
+      std::ostringstream oss;
+      oss << "non-finite area for untouched loop " << i;
+      fail(oss.str());
+    }
 
     if (loopFlag[i] == 0 && area > 0) {
       hole = hole.Boolean(cs, manifold::OpType::Add);
@@ -994,9 +1311,11 @@ std::vector<CrossSection> Tracing(
   }
 
   std::vector<CrossSection> result;
-  for (auto it = resultLoops.begin(); it != resultLoops.end(); it++) {
-    result.push_back(
-        CrossSection(Polygons{*it}).Boolean(hole, manifold::OpType::Subtract));
+  result.reserve(resultLoops.size());
+
+  for (const auto& loop : resultLoops) {
+    CrossSection cs = CrossSection(Polygons{loop});
+    result.push_back(cs.Boolean(hole, manifold::OpType::Subtract));
   }
 
 #ifdef MANIFOLD_DEBUG
