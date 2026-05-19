@@ -13,17 +13,23 @@
 // limitations under the License.
 
 #define _USE_MATH_DEFINES
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 #include "../collider.h"
+#include "../disjoint_sets.h"
 #include "../parallel.h"
 #include "../vec.h"
 #include "clipper2/clipper.core.h"
@@ -188,6 +194,65 @@ double distancePointSegment(const vec2& p, const vec2& p1, const vec2& p2) {
   }
 
   return length(closestPoint - p);
+}
+
+double filletNumericalTolerance(double radius) {
+  return std::max(1e-12, 1e-10 * std::max(1.0, radius));
+}
+
+vec2 chebyshevCenter(const std::vector<vec2>& points) {
+  if (points.empty()) return {};
+  if (points.size() == 1) return points.front();
+
+  double bestRadiusSq = std::numeric_limits<double>::infinity();
+  vec2 bestCenter = points.front();
+
+  auto maxRadiusSq = [&](const vec2& center) {
+    double maxDistSq = 0.0;
+    for (const vec2& p : points) {
+      maxDistSq = std::max(maxDistSq, length2(p - center));
+    }
+    return maxDistSq;
+  };
+
+  auto consider = [&](const vec2& center) {
+    const double radiusSq = maxRadiusSq(center);
+    if (radiusSq < bestRadiusSq) {
+      bestRadiusSq = radiusSq;
+      bestCenter = center;
+    }
+  };
+
+  for (const vec2& p : points) {
+    consider(p);
+  }
+
+  for (size_t i = 0; i < points.size(); ++i) {
+    for (size_t j = i + 1; j < points.size(); ++j) {
+      consider((points[i] + points[j]) * 0.5);
+    }
+  }
+
+  for (size_t i = 0; i < points.size(); ++i) {
+    for (size_t j = i + 1; j < points.size(); ++j) {
+      for (size_t k = j + 1; k < points.size(); ++k) {
+        const vec2 a = points[i], b = points[j], c = points[k];
+        const double d =
+            2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+
+        if (std::abs(d) < EPSILON) continue;
+
+        const double aSq = dot(a, a), bSq = dot(b, b), cSq = dot(c, c);
+        const vec2 center{
+            (aSq * (b.y - c.y) + bSq * (c.y - a.y) + cSq * (a.y - b.y)) / d,
+            (aSq * (c.x - b.x) + bSq * (a.x - c.x) + cSq * (b.x - a.x)) / d};
+
+        consider(center);
+      }
+    }
+  }
+
+  return bestCenter;
 }
 
 std::vector<vec2> discreteArcToPoint(TopoConnectionPair arc, double radius,
@@ -578,6 +643,79 @@ ColliderContext BuildCollider(const Polygons& polygons,
   return info;
 }
 
+struct CircleCluster {
+  vec2 Center;
+  std::vector<size_t> Members;
+};
+
+void UpdateClusteredArcCenter(TopoConnectionPair& pair, const Polygons& loops,
+                              const vec2& center) {
+  pair.CircleCenter = center;
+
+  const auto& edge1Loop = loops[pair.LoopIndex[0]];
+  const auto& edge2Loop = loops[pair.LoopIndex[1]];
+
+  const vec2 p1 = getPointOnEdgeByParameter(
+      edge1Loop[pair.EdgeIndex[0]],
+      edge1Loop[(pair.EdgeIndex[0] + 1) % edge1Loop.size()],
+      pair.ParameterValues[0]);
+  const vec2 p2 = getPointOnEdgeByParameter(
+      edge2Loop[pair.EdgeIndex[1]],
+      edge2Loop[(pair.EdgeIndex[1] + 1) % edge2Loop.size()],
+      pair.ParameterValues[1]);
+
+  pair.RadValues = getRadPair(p1, p2, pair.CircleCenter);
+}
+
+std::vector<CircleCluster> ClusterFilletCircles(
+    std::vector<TopoConnectionPair>& topoConnectionVec, const Polygons& loops,
+    double radius) {
+  const size_t n = topoConnectionVec.size();
+  std::vector<CircleCluster> clusters;
+  if (n == 0) return clusters;
+
+  const double clusterTol = filletNumericalTolerance(radius);
+  const double clusterTolSq = clusterTol * clusterTol;
+
+  DisjointSets circleSets(static_cast<uint32_t>(n));
+
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = i + 1; j < n; ++j) {
+      if (length2(topoConnectionVec[i].CircleCenter -
+                  topoConnectionVec[j].CircleCenter) <= clusterTolSq) {
+        circleSets.unite(static_cast<uint32_t>(i), static_cast<uint32_t>(j));
+      }
+    }
+  }
+
+  std::vector<int> components;
+  const int clusterCount = circleSets.connectedComponents(components);
+  clusters.resize(clusterCount);
+
+  for (size_t i = 0; i < n; ++i) {
+    const size_t clusterIndex = static_cast<size_t>(components[i]);
+    clusters[clusterIndex].Members.push_back(i);
+  }
+
+  for (CircleCluster& cluster : clusters) {
+    std::vector<vec2> centers;
+    centers.reserve(cluster.Members.size());
+
+    for (const size_t member : cluster.Members) {
+      centers.push_back(topoConnectionVec[member].CircleCenter);
+    }
+
+    cluster.Center = chebyshevCenter(centers);
+
+    for (const size_t member : cluster.Members) {
+      UpdateClusteredArcCenter(topoConnectionVec[member], loops,
+                               cluster.Center);
+    }
+  }
+
+  return clusters;
+}
+
 std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
     const Polygons& loops, const std::vector<size_t>& loopOffsetVec,
     const size_t edgeCount, const std::vector<EdgePair>& intersectEdgePair,
@@ -681,69 +819,107 @@ std::vector<std::vector<TopoConnectionPair>> CalculateFilletArc(
   if (topoConnetionVec.empty())
     return std::vector<std::vector<TopoConnectionPair>>();
 
-  // NOTE: Filter invalid fillet circles independently.
+  const bool disableCircleCluster = false;
+  std::vector<CircleCluster> circleClusters;
+
+  if (disableCircleCluster) {
+    circleClusters.reserve(topoConnetionVec.size());
+    for (size_t i = 0; i < topoConnetionVec.size(); ++i) {
+      circleClusters.push_back(
+          CircleCluster{topoConnetionVec[i].CircleCenter, {i}});
+    }
+  } else {
+    // NOTE: Cluster nearly identical candidate circles before validity testing.
+    // This prevents tiny center differences from giving duplicate candidates
+    // different keep/remove decisions against neighboring edges.
+    circleClusters = ClusterFilletCircles(topoConnetionVec, loops, radius);
+  }
+
+  // NOTE: Filter invalid fillet circles per cluster.
   std::vector<uint8_t> mark(topoConnetionVec.size(), 0);
   {
-    Vec<Box> circleBoxVec(topoConnetionVec.size());
+    Vec<Box> circleBoxVec(circleClusters.size());
 
-    for (auto it = topoConnetionVec.begin(); it != topoConnetionVec.end();
-         it++) {
-      vec2 center = it->CircleCenter;
+    for (auto it = circleClusters.begin(); it != circleClusters.end(); it++) {
+      vec2 center = it->Center;
       Box box(toVec3(center - vec2(1, 0) * radius),
               toVec3(center + vec2(1, 0) * radius));
 
       box.Union(toVec3(center - vec2(0, 1) * radius));
       box.Union(toVec3(center + vec2(0, 1) * radius));
 
-      size_t index = std::distance(topoConnetionVec.begin(), it);
+      size_t index = std::distance(circleClusters.begin(), it);
       circleBoxVec[index] = box;
     }
 
-    // If circle is invalid, mark is set to 1.
+    // If a circle cluster is invalid, every candidate in the cluster is marked.
     {
+      std::vector<uint8_t> markCluster(circleClusters.size(), 0);
       auto markInvalidCircle = [&](int i, int j) {
-        if (mark[i]) return;
-
-        const TopoConnectionPair& pair = topoConnetionVec[i];
+        if (markCluster[i]) return;
 
         const size_t ei = collider.EdgeOld2NewVec[j].EdgeIndex,
                      eLoopi = collider.EdgeOld2NewVec[j].LoopIndex;
         const auto& eLoop = loops[eLoopi];
+        const CircleCluster& cluster = circleClusters[i];
 
-        if (eLoopi == pair.LoopIndex[0] && ei == pair.EdgeIndex[0])
+        bool edgeCanInvalidateCluster = false;
+        for (const size_t member : cluster.Members) {
+          const TopoConnectionPair& pair = topoConnetionVec[member];
+          const bool isSource =
+              (eLoopi == pair.LoopIndex[0] && ei == pair.EdgeIndex[0]) ||
+              (eLoopi == pair.LoopIndex[1] && ei == pair.EdgeIndex[1]);
+
+          if (!isSource) {
+            edgeCanInvalidateCluster = true;
+            break;
+          }
+        }
+
+        if (!edgeCanInvalidateCluster) {
           return;
-        else if (eLoopi == pair.LoopIndex[1] && ei == pair.EdgeIndex[1])
-          return;
+        }
 
         const std::array<vec2, 3> ePoints{eLoop[ei],
                                           eLoop[(ei + 1) % eLoop.size()],
                                           eLoop[(ei + 2) % eLoop.size()]};
 
         double distance =
-            distancePointSegment(pair.CircleCenter, ePoints[0], ePoints[1]);
+            distancePointSegment(cluster.Center, ePoints[0], ePoints[1]);
 
         const double gap = distance - radius;
-        const double tol = std::max(1e-12, 1e-10 * std::max(1.0, radius));
+        const double tol = filletNumericalTolerance(radius);
 
         if (gap <= tol) {
 #ifdef MANIFOLD_DEBUG
           if (ManifoldParams().verbose) {
+            const TopoConnectionPair& pair =
+                topoConnetionVec[cluster.Members.front()];
             std::cout << "Removed by edge [" << eLoopi << ", " << ei << "] "
                       << "arc [" << pair.LoopIndex[0] << ", "
                       << pair.EdgeIndex[0] << "] -> [" << pair.LoopIndex[1]
                       << ", " << pair.EdgeIndex[1] << "] "
-                      << "center=" << pair.CircleCenter
+                      << "cluster=" << i << " center=" << cluster.Center
                       << " distance=" << distance << " radius=" << radius
                       << " gap=" << gap << " tol=" << tol << std::endl;
           }
 #endif
-          mark[i] = 1;
+          markCluster[i] = 1;
         }
       };
 
       auto recorder = MakeSimpleRecorder(markInvalidCircle);
 
       collider.Collider.Collisions(circleBoxVec.cview(), recorder);
+
+      for (size_t clusterIndex = 0; clusterIndex < circleClusters.size();
+           ++clusterIndex) {
+        if (!markCluster[clusterIndex]) continue;
+
+        for (const size_t member : circleClusters[clusterIndex].Members) {
+          mark[member] = 1;
+        }
+      }
     }
 
 #ifdef MANIFOLD_DEBUG
@@ -1422,8 +1598,8 @@ std::vector<CrossSection> FilletImpl(const Polygons& polygons, double radius,
   resultOutputFile.open("Testing/Fillet/" + std::to_string(caseIndex) + ".txt");
   if (!resultOutputFile.is_open()) {
     std::cerr << "Error: Could not open file "
-              << std::to_string(caseIndex) + ".txt" << " for writing."
-              << std::endl;
+              << std::to_string(caseIndex) + ".txt"
+              << " for writing." << std::endl;
     throw std::exception();
   }
   caseIndex++;
