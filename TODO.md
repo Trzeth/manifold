@@ -1,19 +1,19 @@
-[==========] 112 tests from 1 test suite ran. (4131 ms total)
-[  PASSED  ] 107 tests.
-[  FAILED  ] 5 tests, listed below:
-[  FAILED  ] Polygon.Fillet.Looping1
-[  FAILED  ] Polygon.Fillet.Looping2
-[  FAILED  ] Polygon.Fillet.Holes6
-[  FAILED  ] Polygon.Fillet.Precision
-[  FAILED  ] Polygon.Fillet.BigSponge
+cmake -DMANIFOLD_DEBUG=ON -DMANIFOLD_CROSS_SECTION=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
 
-[  PASSED  ] 108 tests.
+cmake -DMANIFOLD_DEBUG=ON -DMANIFOLD_ASSERT=ON -DMANIFOLD_PAR=ON -DMANIFOLD_USE_BUILTIN_TBB=ON -DMANIFOLD_CROSS_SECTION=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
+
+[==========] 112 tests from 1 test suite ran. (52011 ms total)
+[  PASSED  ] 107 tests.
 [  FAILED  ] 5 tests, listed below:
 [  FAILED  ] Polygon.Fillet.Looping1
 [  FAILED  ] Polygon.Fillet.Looping2
 [  FAILED  ] Polygon.Fillet.ExtraTriangle
 [  FAILED  ] Polygon.Fillet.Precision
-[  FAILED  ] Polygon.Fillet.Sponge
+[  FAILED  ] Polygon.Fillet.BigSponge
+
+## 1. Bug to fix
+
+
 
 
 TODO:
